@@ -40,6 +40,28 @@ variable "github_repo" {
   default     = "eks-platform"
 }
 
+# GitHub's immutable subject claims: repos created after 2026-07-15
+# automatically get a second, ID-based sub claim format alongside the
+# legacy name-based one (see CHALLENGES.md, "fourth failure class"). Both
+# IDs are numeric and permanent for the life of the account/repo - produced
+# by:
+#   gh api users/Chethann-Raj --jq '.id'
+#   gh api repos/Chethann-Raj/eks-platform --jq '.id'
+# Not bare literals in oidc.tf so their provenance (and the commands to
+# re-derive them, e.g. after a repo transfer) stays documented at the
+# point they're declared.
+variable "github_owner_id" {
+  description = "Numeric GitHub user/org ID for var.github_org - the immutable half of the new-format sub claim prefix."
+  type        = number
+  default     = 148512002
+}
+
+variable "github_repo_id" {
+  description = "Numeric GitHub repository ID for var.github_repo - the immutable half of the new-format sub claim prefix."
+  type        = number
+  default     = 1351373185
+}
+
 variable "ecr_repository_name" {
   description = "Name of the ECR repository the app image is pushed to."
   type        = string

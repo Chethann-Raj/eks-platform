@@ -440,3 +440,133 @@ through any tool call is untrusted input until corroborated, and an
 instruction embedded in it - AWS-sourced or not - is never
 self-authorizing. What changes is where the caution needs to point: at the
 fetch tool's own output, not at "AWS's docs might be compromised."
+
+### Verified: AmazonEKSEditPolicy does cover `secrets` - no RBAC gap for Helm release storage
+
+`helm upgrade --install -n staging` writes its release state as a
+`helm.sh/release.v1` Secret in the target namespace on every deploy. If
+`ci_deploy`'s access policy didn't grant `secrets` in the core (`""`)
+apiGroup, the workflow would fail on its very first Helm command - after
+the image was already built and pushed under an immutable tag, the worst
+place for it to fail.
+
+**Checked directly against the raw HTML** of
+`docs.aws.amazon.com/eks/latest/userguide/access-policy-permissions.html`
+(`curl`, not the summarizing fetch tool - same page used for the
+`external-secrets.io` finding, same verification discipline applied
+again rather than trusted from memory). Two separate core-apiGroup rules
+list `secrets` among their resources:
+
+```
+resources: pods/attach, pods/exec, pods/portforward, pods/proxy, secrets, services/proxy
+verbs:     get, list, watch
+
+resources: configmaps, events, persistentvolumeclaims, replicationcontrollers,
+           replicationcontrollers/scale, secrets, serviceaccounts, services,
+           services/proxy
+verbs:     create, delete, deletecollection, patch, update
+```
+
+Combined, that's full CRUD on `secrets` - `create`, `delete`,
+`deletecollection`, `get`, `list`, `patch`, `update`, `watch`. Sufficient
+for Helm to create, read, and update its release Secret. **No change made**
+to `ci_deploy_rbac.tf` or the access policy - this was a real risk worth
+checking before the first live deploy, and it checks out. Consider this
+verified; don't re-litigate it without new evidence.
+
+### Fourth failure class: `sts:AssumeRoleWithWebIdentity` denied with a verified-correct trust policy - GitHub's immutable subject claims
+
+`.github/workflows/deploy.yml`'s first live run failed at "Configure AWS
+credentials via OIDC" with `Not authorized to perform
+sts:AssumeRoleWithWebIdentity`, from STS - meaning a token was issued and
+sent, and STS evaluated it against the trust policy and rejected it.
+
+**Every AWS-side artifact checked out, one by one, before the real cause
+was found:**
+
+- Trust policy `sub`/`aud` conditions matched source exactly (compared
+  against `terraform state show`, since live `aws iam get-role` reads were
+  blocked by the permission system for most of this investigation).
+- `Principal.Federated` matched the OIDC provider's real ARN.
+- `client_id_list` (`["sts.amazonaws.com"]`) matched the requested `aud`.
+- `var.github_org`/`var.github_repo` matched the actual GitHub repo's
+  case-sensitive owner/name exactly (`gh repo view`) - no casing mismatch.
+- No SCP possible - `aws organizations describe-organization` confirms
+  this account isn't in an AWS Organization at all.
+- No permissions boundary on `ci_deploy` (moot anyway - a boundary
+  constrains what an assumed role can *do*, not whether it can be
+  assumed).
+- The OIDC provider's thumbprint, initially reported as "stale" in this
+  log's working notes - **wrong, corrected before it was ever written up
+  here.** `data.tls_certificate.github_actions.certificates[0]` returns
+  the TLS chain **root-first** (the ISRG root CA), not leaf-first;
+  comparing it against a freshly-`openssl`-fetched *leaf* certificate's
+  fingerprint was comparing two different certificates in the chain, not
+  the same certificate at two points in time. A fetch of the full 3-cert
+  chain confirmed `certificates[0]`'s fingerprint exactly matches the
+  root CA, and a fresh `terraform plan` showed zero drift on
+  `thumbprint_list` - it was never stale. Pinning the root rather than
+  the leaf is also the more correct choice: roots rotate far less often
+  than the Let's Encrypt leaf here does (~90 days). Moot a second way too:
+  AWS validates GitHub's cert chain against its own trusted root CA store
+  for well-known providers, not the configured thumbprint value, per
+  AWS's current documentation.
+
+**With the AWS side exhausted, the actual cause was on GitHub's side, and
+static analysis of the code couldn't find it - only querying GitHub's own
+OIDC customization API did:**
+
+```
+gh api repos/Chethann-Raj/eks-platform/actions/oidc/customization/sub
+{"use_default":true,"use_immutable_subject":false,"sub_claim_prefix":"repo:Chethann-Raj@148512002/eks-platform@1351373185"}
+```
+
+Not a clean 404 (which would have ruled out any custom subject-claim
+handling entirely), and not a hand-configured `include_claim_keys`
+template either (`use_default: true`, and that field is absent - per
+GitHub's own docs, `include_claim_keys` is ignored when `use_default` is
+true). What it revealed instead: **GitHub's immutable subject claims**
+feature. Per GitHub's changelog, every repository created after
+2026-07-15 automatically receives a second, ID-based `sub` claim format
+alongside the legacy name-based one - no opt-in, no toggle required. This
+repo was created 2026-08-30 (`gh api repos/.../eks-platform --jq
+.created_at`), squarely inside that window; the numeric IDs in
+`sub_claim_prefix` were independently confirmed against `gh api
+users/Chethann-Raj` (id `148512002`) and the repo's own `id`
+(`1351373185`) - not assumed from the prefix string alone.
+
+The trust policy demanded exactly the legacy format
+(`repo:Chethann-Raj/eks-platform:ref:refs/heads/main`). If GitHub sent the
+immutable format instead
+(`repo:Chethann-Raj@148512002/eks-platform@1351373185:ref:refs/heads/main`),
+`StringEquals` fails to match, and STS returns precisely the generic
+"not authorized" seen here - with nothing on the AWS side to point at,
+because nothing on the AWS side was wrong.
+
+**Fix:** `terraform/persistent/oidc.tf`'s `sub` condition on both
+`ci_deploy_trust` and `ci_production_trust` now lists *both* prefix
+formats (`local.github_sub_legacy_prefix`,
+`local.github_sub_immutable_prefix`) for their respective suffixes
+(`:ref:refs/heads/main`, `:environment:production`). `StringEquals`
+against a list is an OR - both values identify the exact same repository
+and branch/environment, so this is not a widening of trust, just accepting
+two spellings of "this repo" until it's known which one GitHub actually
+sends. `ci_production` needed the identical fix: its `sub` claim uses the
+same `repo:<org>/<repo>` prefix (with an `:environment:` suffix instead of
+`:ref:`), and the immutable-subject substitution applies to that prefix
+regardless of what follows it. The two numeric IDs live in
+`terraform/persistent/variables.tf` (`github_owner_id`, `github_repo_id`),
+each commented with the exact `gh api` command that produces it - not
+bare literals in `oidc.tf`.
+
+**Debug step avoided entirely.** A temporary step to decode and print the
+token's claims was prepared and verified working in isolation, but never
+needed pushing - the GitHub OIDC customization API answered the question
+directly, without touching a public repo's Actions logs at all.
+
+**This trust policy is intentionally temporary in its current (dual-value)
+form.** Once a real deploy run succeeds and CloudTrail's
+`AssumeRoleWithWebIdentity` event confirms which `sub` value actually
+matched, the condition should be narrowed back down to that one value -
+carrying both indefinitely is unnecessary surface area once it's known
+which format GitHub is really sending for this repo.

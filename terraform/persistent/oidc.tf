@@ -9,6 +9,16 @@ locals {
   # ("${var.project}-${var.environment}" there, with environment =
   # "staging") - if that ever changes, update this too.
   staging_cluster_arn = "arn:aws:eks:${var.aws_region}:${data.aws_caller_identity.current.account_id}:cluster/${var.project}-staging"
+
+  # Two `sub` claim prefixes for the same repo - see CHALLENGES.md's
+  # "fourth failure class" entry. This repo was created 2026-08-30, after
+  # GitHub's 2026-07-15 cutover for automatic immutable subject claims, so
+  # GitHub may issue either the legacy name-based prefix or the new
+  # ID-based one; every trust policy below accepts both until CloudTrail
+  # confirms which one is actually sent, at which point this should be
+  # narrowed back to a single value.
+  github_sub_legacy_prefix    = "repo:${var.github_org}/${var.github_repo}"
+  github_sub_immutable_prefix = "repo:${var.github_org}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}"
 }
 
 # GitHub's OIDC token-issuing endpoint. Fetched dynamically rather than
@@ -26,12 +36,16 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
 # --- CI deploy role: assumed only by workflow runs on refs/heads/main ------
 #
 # The `sub` claim GitHub embeds in the OIDC token for a normal (non
-# environment-gated) job run is `repo:<org>/<repo>:ref:<git ref>`. Pinning it
-# with StringEquals (not StringLike/wildcards) to exactly
-# "repo:Chethann-Raj/eks-platform:ref:refs/heads/main" blocks:
+# environment-gated) job run is `repo:<org>/<repo>:ref:<git ref>` - except
+# GitHub may substitute the ID-based immutable prefix for the
+# "repo:<org>/<repo>" portion instead, per local.github_sub_immutable_prefix
+# above. StringEquals against a LIST is an OR, and both values identify the
+# exact same repository and branch - this accepts either spelling of "this
+# repo, on main" without accepting anything broader. It's still exact-match
+# (not StringLike/wildcards), so this still blocks:
 #   - any other repository, including a fork of this public repo - a fork's
-#     workflow gets a `sub` of "repo:someone-else/eks-platform:ref:..." which
-#     does not match.
+#     workflow gets a `sub` for a different repo/ID pair entirely, matching
+#     neither value.
 #   - any other ref in *this* repo - feature branches, PR branches (whose
 #     `sub` is "repo:...:pull_request", not a ref at all), and tags.
 # The `aud` condition additionally blocks any OIDC token GitHub issued for a
@@ -55,7 +69,10 @@ data "aws_iam_policy_document" "ci_deploy_trust" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_org}/${var.github_repo}:ref:refs/heads/main"]
+      values = [
+        "${local.github_sub_legacy_prefix}:ref:refs/heads/main",
+        "${local.github_sub_immutable_prefix}:ref:refs/heads/main",
+      ]
     }
   }
 }
@@ -124,7 +141,12 @@ resource "aws_iam_role_policy" "ci_deploy_permissions" {
 # OIDC token - and only sets `sub` to
 # "repo:<org>/<repo>:environment:<name>" - after that environment's
 # protection rules (required reviewers, wait timer, etc.) are satisfied.
-# StringEquals on that exact string blocks:
+# Same immutable-subject substitution as ci_deploy above applies here too:
+# the "repo:<org>/<repo>" prefix is repo-wide, not specific to the `:ref:`
+# suffix, so an `:environment:` sub claim is equally affected. Same fix:
+# StringEquals against both prefix spellings (still an exact-match OR, not
+# a widening) - see local.github_sub_immutable_prefix's comment. This
+# still blocks:
 #   - any other repository/fork, same reasoning as above.
 #   - any job in this repo that does NOT declare `environment: production`
 #     (e.g. the main.yml staging deploy), even though it's the same repo.
@@ -148,7 +170,10 @@ data "aws_iam_policy_document" "ci_production_trust" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_org}/${var.github_repo}:environment:production"]
+      values = [
+        "${local.github_sub_legacy_prefix}:environment:production",
+        "${local.github_sub_immutable_prefix}:environment:production",
+      ]
     }
   }
 }
