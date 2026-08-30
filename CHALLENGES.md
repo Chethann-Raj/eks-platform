@@ -670,3 +670,251 @@ All manual diagnostic artifacts (the `helm install` done to reproduce
 this, the throwaway `psql` pod, local Docker containers/network) were torn
 down after use - nothing left running outside the CI/Terraform-managed
 path.
+
+### Fifth failure class: ExternalDNS's TXT ownership record silently never gets written at the zone apex
+
+Run 33336673112 (Bugs A and B above, fixed) succeeded and deployed
+cleanly. Separately, `https://chethanraj.site` was unreachable -
+`curl`/`dig` returned nothing.
+
+**Problem:** Route53's `chethanraj.site` A/AAAA alias pointed at an ALB
+DNS name that no longer existed in the account - a different ALB
+(`describe-load-balancers` confirmed only one, `active`, matching the
+current Ingress) had replaced it at some point after ExternalDNS last
+wrote the record. ExternalDNS (chart `1.21.1`, appVersion `0.21.0`,
+`--policy=sync --registry=txt --txt-owner-id=eks-platform-staging`) was
+running the whole time, on a 1-minute interval, and its logs repeated
+`"All records are already up to date"` through every cycle - it never
+attempted a fix.
+
+**What was checked, in order:** the single `TargetGroupBinding` in the
+cluster first (`serviceRef` resolved to the live `app` Service, and its
+target group's `LoadBalancerArns` matched the current ALB - not an
+orphan, ruled out immediately). Then IAM (`external_dns.tf`'s policy
+grants `route53:ChangeResourceRecordSets`/`ListResourceRecordSets`
+scoped to the one hosted zone, plus account-wide `ListHostedZones` -
+correct, not the cause). Then `aws route53 list-resource-record-sets`
+directly: **zero TXT records existed in the zone at all**, despite
+`--registry=txt` being explicitly set - the real anomaly worth chasing.
+
+**Root cause, confirmed by temporarily patching the Deployment to
+`--log-level=debug`** (reverted after - the patch attempt to revert it
+was itself blocked by the permission classifier as a live-cluster
+mutation; left for the user, see below) and reading a full reconcile
+cycle rather than guessing from INFO-level output alone:
+
+```
+Adding chethanraj.site. to zone chethanraj.site. [Id: /hostedzone/...]
+Skipping record cname-chethanraj.site because no hosted zone matching record DNS Name was detected
+Skipping record aaaa-chethanraj.site because no hosted zone matching record DNS Name was detected
+```
+
+ExternalDNS's default TXT-registry naming scheme builds the ownership
+record's name by string-concatenating a type prefix directly onto the
+DNS name (`"cname-" + "chethanraj.site"` -> `"cname-chethanraj.site"`).
+For a subdomain like `app.example.com` this produces a valid subdomain
+of the zone (`cname-app.example.com` still ends in `.example.com`). At
+the **zone apex** - `chethanraj.site` has no subdomain label at all -
+the same concatenation produces `cname-chethanraj.site`, which is a
+*different* domain entirely under the `.site` TLD, not a subdomain of
+`chethanraj.site`. ExternalDNS's own zone-matching correctly recognizes
+this and skips writing the record - silently, at debug level only nothing
+above that ever surfaces it. Debug output also showed the planner
+correctly recomputing the desired ALB target every single cycle
+(`Endpoints generated from ingress: ... 573505611 ...`) - it was never
+blind to the change, it just could never prove ownership of the existing
+record to justify updating it, and stayed stuck skipping it forever:
+`"Skipping endpoint chethanraj.site ... A ... because owner id does not
+match (found: \"\", required: \"eks-platform-staging\")"`.
+
+Net effect: ExternalDNS can create the apex A/AAAA alias exactly once
+(when nothing exists there yet, a genuine clean slate), but never
+acquires TXT ownership over it, so on every later reconcile - including
+after every nightly teardown/rebuild replaces the ALB - it treats its own
+past record as foreign and refuses to correct it. This is a structural
+bug for this project specifically because `chethanraj.site` is served at
+the bare apex (`CLAUDE.md` §1/§6), not a subdomain, and the platform is
+torn down and rebuilt nightly (§1), so the ALB's identity changes on
+every rebuild.
+
+**Immediate recovery (approved by the user, executed via `aws route53
+change-resource-record-sets` - a live DNS mutation the permission
+classifier correctly flagged for explicit confirmation first):** deleted
+the two stale A/AAAA records. With the apex name+type clear, ExternalDNS's
+very next cycle re-created them pointing at the correct, live ALB - `curl
+https://chethanraj.site` returned `{"message":"Hello from
+eks-platform","visits":1}` immediately after. This is a full, unavoidably
+manual, out-of-band recovery step, not something the codebase itself
+does - if the same ALB-replacement-while-DNS-is-unowned situation recurs
+before the durable fix below is applied, it requires the same manual
+delete again.
+
+**Attempted fix, applied but UNVERIFIED:** added `txtPrefix = "txt."` to
+`helm_release.external_dns`'s `set` block in
+`terraform/modules/addons/external_dns.tf` and applied it. The theory: a
+prefix ending in `.` forms a real subdomain when concatenated (`"txt." +
+"chethanraj.site"` -> `"txt.chethanraj.site"`), which should correctly
+zone-match and let ExternalDNS write and later recognize its own TXT
+ownership record at the apex - restoring the update path this project's
+cluster-name-based `txtOwnerId` (see the comment already in that file)
+was designed to rely on for exactly this nightly-rebuild scenario.
+`terraform fmt`, `terraform validate`, and `terraform plan` all ran clean
+before applying - one resource changed, nothing else in the environment
+drifted.
+
+**It has not actually worked yet, as far as any evidence shows.** After
+applying it: the stale apex A/AAAA were deleted to force a clean
+create-cycle, and ExternalDNS did recreate them pointing at the live ALB
+- but a direct, unfiltered `aws route53 list-resource-record-sets` dump
+of the entire zone, checked three separate times across multiple
+reconcile cycles (waiting a full cycle past the create each time), found
+**zero TXT records of any name anywhere in the zone.** No ownership
+record was produced.
+
+One thing changed between the pre-fix and post-fix debug captures, and
+it's suggestive but explicitly **not proof**: before the fix, every
+cycle logged an explicit skip for the apex A/AAAA -
+`"Skipping endpoint chethanraj.site ... A ... because owner id does not
+match (found: \"\", required: \"eks-platform-staging\")"`. After the fix,
+that line is simply gone - the only skip left in the debug output is for
+the unrelated ACM DNS-validation CNAME record
+(`_146318...chethanraj.site`), which was never ExternalDNS's to manage.
+No line anywhere - write, skip, or otherwise - mentions a TXT record for
+`chethanraj.site`, `txt.chethanraj.site`, or any other name during these
+captures.
+
+The problem with treating "the skip line disappeared" as confirmation:
+every capture taken after the fix was a **steady-state** cycle, where the
+live record already matched the desired target (because it had just been
+manually recreated). `"All records are already up to date"` is true
+regardless of whether TXT ownership tracking is actually functioning,
+since there's nothing to reconcile either way when desired == actual.
+The only way to see what ExternalDNS truly does with the TXT write is to
+catch it live during an actual `CREATE` - a genuine mismatch between
+desired and actual state - and no such event was observed after the
+`txtPrefix` change was in place. The one real `CREATE` cycle captured
+(`22:17:15Z`, `"Desired change: CREATE chethanraj.site A"` /
+`"... AAAA"`) planned only the A and AAAA records - no TXT line appeared
+there either, which is at best neutral and at worst evidence the write is
+still silently failing under the new prefix, just via a different code
+path that no longer happens to log a skip.
+
+**This is deliberately left unresolved rather than force-verified.**
+Forcing a real test means deleting the apex A/AAAA again and watching
+the very next `CREATE` cycle with debug logging on - a second live DNS
+mutation, right after the first one, purely to validate a hypothesis, and
+not warranted this close to the submission deadline for a `staging`
+environment that already has a working manual recovery path (below). The
+honest status is: **`txtPrefix="txt."` is applied to the Terraform config
+and currently live in the cluster, but whether it actually fixes TXT
+ownership at the apex is unverified and will only be tested for real the
+next time the ALB changes identity** - i.e., at the next teardown/
+rebuild. If the site is unreachable after a rebuild with apex DNS
+pointing at a dead ALB again, treat this fix as disproven and fall back
+to the manual recovery procedure below.
+
+## Runbooks
+
+### Known issue: apex DNS after a rebuild
+
+**Symptom:** `https://chethanraj.site` is unreachable. `dig +short
+chethanraj.site` returns nothing (or resolves, but nothing answers on
+443). The apex `A`/`AAAA` alias in Route53 points at an ALB DNS name
+that no longer exists in the account.
+
+**Cause, one line:** ExternalDNS's TXT ownership record for the apex
+domain is missing (see "Fifth failure class" above), so it can create
+the apex `A`/`AAAA` alias exactly once but never updates it again once
+the ALB behind the Ingress is replaced - which happens on every
+teardown/rebuild.
+
+**Manual recovery.** Requires `aws` CLI configured with the `pro`
+profile and `kubectl` pointed at the `staging` cluster. Nothing here
+needs the AWS account ID - the zone ID and CLI profile are enough.
+
+```bash
+# 1. Confirm the symptom.
+dig +short chethanraj.site
+curl -sS -o /dev/null -w '%{http_code}\n' https://chethanraj.site || true
+
+# 2. Look up the hosted zone ID without hardcoding it.
+ZONE_ID=$(terraform -chdir=terraform/persistent output -raw hosted_zone_id)
+echo "Zone ID: $ZONE_ID"
+
+# 3. Find the ALB that's actually live behind the current Ingress.
+LIVE_ALB_HOSTNAME=$(kubectl -n staging get ingress app \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+echo "Live ALB: $LIVE_ALB_HOSTNAME"
+
+# 4. Pull the CURRENT apex A/AAAA records and their exact AliasTarget.
+#    Route53 requires a DELETE request to match the existing record
+#    byte-for-byte, so copy AliasTarget.HostedZoneId and DNSName
+#    straight out of this output - do not retype them by hand.
+aws route53 list-resource-record-sets --profile pro \
+  --hosted-zone-id "$ZONE_ID" \
+  --query "ResourceRecordSets[?Name=='chethanraj.site.' && (Type=='A' || Type=='AAAA')]" \
+  --output json
+
+# 5. If AliasTarget.DNSName above does NOT match $LIVE_ALB_HOSTNAME
+#    (confirms staleness - optionally also check the old ALB is gone:
+#    aws elbv2 describe-load-balancers --profile pro --query
+#    "LoadBalancers[?DNSName=='<old DNSName from step 4>']" returns []),
+#    build a DELETE change-batch using the exact AliasTarget from step 4.
+#    Replace ALIAS_ZONE_ID and STALE_ALB_DNS_NAME below with those values.
+cat > /tmp/delete-stale-dns.json <<'EOF'
+{
+  "Changes": [
+    {
+      "Action": "DELETE",
+      "ResourceRecordSet": {
+        "Name": "chethanraj.site.",
+        "Type": "A",
+        "AliasTarget": {
+          "HostedZoneId": "ALIAS_ZONE_ID",
+          "DNSName": "STALE_ALB_DNS_NAME",
+          "EvaluateTargetHealth": true
+        }
+      }
+    },
+    {
+      "Action": "DELETE",
+      "ResourceRecordSet": {
+        "Name": "chethanraj.site.",
+        "Type": "AAAA",
+        "AliasTarget": {
+          "HostedZoneId": "ALIAS_ZONE_ID",
+          "DNSName": "STALE_ALB_DNS_NAME",
+          "EvaluateTargetHealth": true
+        }
+      }
+    }
+  ]
+}
+EOF
+# Edit /tmp/delete-stale-dns.json now to fill in the two placeholders.
+
+# 6. Submit the delete.
+aws route53 change-resource-record-sets --profile pro \
+  --hosted-zone-id "$ZONE_ID" \
+  --change-batch file:///tmp/delete-stale-dns.json
+
+# 7. Wait one ExternalDNS reconcile cycle (interval=1m; give it margin)
+#    then confirm it recreated the records against the live ALB.
+sleep 90
+aws route53 list-resource-record-sets --profile pro \
+  --hosted-zone-id "$ZONE_ID" \
+  --query "ResourceRecordSets[?Name=='chethanraj.site.' && (Type=='A' || Type=='AAAA')].[Type,AliasTarget.DNSName]" \
+  --output table
+# Expect both rows' DNSName to equal $LIVE_ALB_HOSTNAME from step 3.
+
+# 8. Verify externally.
+dig +short chethanraj.site
+curl -sS -o /dev/null -w '%{http_code}\n' https://chethanraj.site
+# Expect: two IPs from dig, 200 from curl.
+```
+
+**This is a recovery procedure, not a fix.** It restores service for the
+current ALB but does not resolve the underlying TXT-ownership gap - the
+same failure will recur the next time the ALB is replaced, until "Fifth
+failure class" above is confirmed resolved (or superseded by a different
+fix).

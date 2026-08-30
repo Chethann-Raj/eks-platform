@@ -109,6 +109,24 @@ resource "helm_release" "external_dns" {
       name  = "txtOwnerId"
       value = var.cluster_name
     },
+    # txtPrefix must end in a "." so the ownership TXT record forms a real
+    # subdomain of the zone (e.g. "txt.chethanraj.site"). Left at its
+    # default, external-dns names apex-record TXT ownership markers by
+    # string-concatenating a bare prefix onto the record name (e.g.
+    # "cname-chethanraj.site" for the apex "chethanraj.site"), which is not
+    # a subdomain of the zone at all - it silently fails zone-matching and
+    # the TXT record is never written. Confirmed via --log-level=debug:
+    # "Skipping record cname-chethanraj.site because no hosted zone
+    # matching record DNS Name was detected". Without that TXT ownership
+    # marker, external-dns can create the apex A/AAAA alias exactly once,
+    # but treats it as foreign on every later run and refuses to update it
+    # - so the record goes stale and unrecoverable the moment the ALB is
+    # replaced, which happens on every nightly teardown/rebuild. See
+    # CHALLENGES.md for the full incident.
+    {
+      name  = "txtPrefix"
+      value = "txt."
+    },
     {
       name  = "domainFilters[0]"
       value = var.domain_name
