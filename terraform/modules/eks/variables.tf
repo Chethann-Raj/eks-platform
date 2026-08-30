@@ -108,6 +108,11 @@ variable "ebs_csi_version" {
   default = "v1.65.0-eksbuild.1"
 }
 
+variable "metrics_server_version" {
+  type    = string
+  default = "v0.9.0-eksbuild.7"
+}
+
 variable "access_entries" {
   description = <<-EOT
     EKS access entries (authentication_mode = "API", not aws-auth). Keyed by
@@ -119,6 +124,19 @@ variable "access_entries" {
     "AmazonEKSClusterAdminPolicy"), not an ARN and not an IAM policy ARN -
     see the comment above policy_arn in access_entries.tf for why. Confirm
     valid names with `aws eks list-access-policies`.
+
+    kubernetes_groups is for binding this principal to a Kubernetes
+    Role/RoleBinding (in another module, e.g. modules/addons) when the
+    access policy alone doesn't cover everything the principal needs -
+    see modules/addons' ci_deploy_rbac.tf for why ci_deploy needs one.
+    Bind RoleBindings to the GROUP name here, never to the access entry's
+    assigned `username` directly: for a role principal, EKS derives that
+    username as "arn:aws:sts::<acct>:assumed-role/<role>/{{SessionName}}"
+    - a template, not a literal string - and substitutes the real,
+    per-request session name at auth time. A RoleBinding subject is an
+    exact string match, so binding to that literal templated username
+    would never match any real request. A Kubernetes group name has no
+    such per-session variability.
 
     Example:
       {
@@ -132,6 +150,7 @@ variable "access_entries" {
           access_policy     = "AmazonEKSEditPolicy"
           access_scope_type = "namespace"
           namespaces        = ["staging"]
+          kubernetes_groups = ["eks-platform-ci-deploy"]
         }
       }
   EOT
@@ -140,6 +159,7 @@ variable "access_entries" {
     access_policy     = string
     access_scope_type = string
     namespaces        = optional(list(string), [])
+    kubernetes_groups = optional(list(string), [])
   }))
   default = {}
 }

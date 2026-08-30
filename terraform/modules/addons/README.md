@@ -139,32 +139,61 @@ ESO's controller pod already runs as the IRSA-annotated `external-secrets`
 service account, so the AWS SDK picks up those credentials from the pod's
 own environment without needing to impersonate a different one.
 
-## RDS password rotation vs. env-var Secrets - Reloader is a Phase 3 dependency
+## ci_deploy's supplementary RBAC for ExternalSecret (`ci_deploy_rbac.tf`)
+
+`AmazonEKSEditPolicy` (the access policy `ci_deploy` is associated with in
+`envs/staging/main.tf`) does not cover the `external-secrets.io` API group -
+confirmed against AWS's own published permission table for it, not
+inferred. `ci_deploy`'s `helm upgrade` needs to create/update the
+`ExternalSecret` in `charts/app/`, so `ci_deploy_rbac.tf` adds an ordinary
+namespaced Kubernetes `Role` + `RoleBinding` granting exactly
+`create`/`get`/`list`/`patch`/`update`/`delete` on `externalsecrets` in the
+`staging` namespace - nothing cluster-scoped, and no second access policy
+association (AWS's access policies aren't composable a la carte; this is
+deliberately just an ordinary Kubernetes RBAC grant instead).
+
+The `RoleBinding` binds to a **Kubernetes Group**
+(`var.ci_deploy_kubernetes_group`), never to the access entry's `username`.
+For a role principal, EKS derives that username as
+`arn:aws:sts::<acct>:assumed-role/<role>/{{SessionName}}` - a template it
+substitutes the real, per-invocation session name into at authentication
+time, not a literal string. Every GitHub Actions run picks its own session
+name, so a `RoleBinding` subject bound to that literal templated string
+would never match any real request. The group name is instead set directly
+on the access entry via `kubernetes_groups`
+(`modules/eks/access_entries.tf`) - `--kubernetes-groups` on an access
+entry is documented as exactly "the value for name that you've specified
+for `kind: Group`", with no per-session variability.
+
+## RDS password rotation vs. env-var Secrets - resolved, Reloader is no longer needed
 
 `manage_master_user_password` (the rds module) means AWS rotates that
 Secrets Manager secret's value on its own schedule, not on any schedule
-this Terraform config controls. Once a `ClusterSecretStore`/`ExternalSecret`
-exists (the follow-up noted above) and materializes that secret into a
-Kubernetes `Secret`, ESO keeps the `Secret` object itself in sync on its
-refresh interval - but **a pod that reads that Secret into an environment
-variable only sees the value that was current when the container started**.
-Env vars are frozen at container start; Kubernetes does not re-inject them
-into a running container when the backing Secret changes. A rotation would
-silently leave running app pods holding a now-invalid password until
-something restarts them.
+this Terraform config controls. An app that read it into an environment
+variable would only ever see the value that was current when its container
+started - env vars are frozen at container start, and Kubernetes never
+re-injects them into a running container when the backing Secret changes.
 
-Two ways to actually fix this, neither implemented here:
+**Resolved in Phase 3, not deferred:** `app/db.py` mounts the
+ESO-materialized Secret as a file (`charts/app/templates/deployment.yaml`)
+and re-reads `username`/`password` from disk on every new database
+connection, rather than once at import time. The `volumeMount` has no
+`subPath` (a `subPath` mount is a bind-mount of a single file's content at
+mount time and does **not** get kubelet's periodic refresh - one of the
+most common ways this pattern silently breaks). Without `subPath`, kubelet
+refreshes the projected Secret volume's file contents in place on its own
+sync period (~60s) whenever the backing Secret object changes, and the
+next connection `db.py` opens picks that up automatically. Residual
+staleness is bounded by two numbers, both small: kubelet's ~60s volume
+refresh, plus ESO's `refreshInterval: 1h` on the `ExternalSecret`
+(`charts/app/templates/externalsecret.yaml`) for how often it re-fetches
+from Secrets Manager in the first place.
 
-- **Reloader** (stakater/Reloader): watches Secrets/ConfigMaps and rolls the
-  Deployment when one it's annotated to watch changes, so a rotation
-  triggers a normal rolling restart with the new value.
-- A **file-mounted Secret volume** instead of env vars: kubelet updates the
-  mounted file in place on a change (subject to its own sync period), but
-  the application still has to notice the file changed and re-read it - a
-  file mount alone doesn't solve this without app-side support either.
-
-Deliberately not adding Reloader in this pass - flagged here as a Phase 3
-dependency once the app deployment (and its restart-safety story) exists.
+**Reloader is no longer a dependency of this project.** It exists to solve
+the env-var version of this problem (roll the Deployment on a Secret
+change) - once credentials come from a re-read file instead, there's
+nothing for a rolling restart to accomplish that the file refresh doesn't
+already handle.
 
 ## `depends_on` and CLAUDE.md §10 (teardown ordering)
 

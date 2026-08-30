@@ -36,6 +36,23 @@ resource "aws_eks_addon" "coredns" {
   depends_on = [aws_eks_node_group.default]
 }
 
+# --- metrics-server: needs nodes, no IRSA ----------------------------------
+# Reads the kubelet summary API on each node, not any AWS API - no service
+# account role needed, same shape as coredns above. Without this addon,
+# `kubectl top nodes` has nothing to answer and the HPA in charts/app/ sits
+# at <unknown>/70% forever: Helm's --wait/--atomic don't wait on HPAs, so a
+# deploy goes green while the autoscaling deliverable is silently dead.
+resource "aws_eks_addon" "metrics_server" {
+  cluster_name  = aws_eks_cluster.this.name
+  addon_name    = "metrics-server"
+  addon_version = var.metrics_server_version
+
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+
+  depends_on = [aws_eks_node_group.default]
+}
+
 # --- aws-ebs-csi-driver: needs nodes + its own IRSA role -------------------
 data "aws_iam_policy_document" "ebs_csi_assume" {
   statement {

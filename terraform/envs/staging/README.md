@@ -64,6 +64,47 @@ This is what lets the AWS Load Balancer Controller (Phase 2) and other
 cluster-aware tooling find these subnets by cluster, in addition to the
 `kubernetes.io/role/elb`/`internal-elb` tags the vpc module always sets.
 
+## Verifying the Phase 3 IRSA in-place "updates" are cosmetic, post-apply
+
+`phase3.tfplan` shows `aws_iam_role.external_dns`/`external_secrets`/`lbc`
+(and their `aws_iam_role_policy` documents) as "updated in-place" even
+though nothing about their actual trust or permission content changed -
+see CHALLENGES.md for why (`module.addons`'s module-level `depends_on
+[module.eks]` defers several data sources to apply-time whenever anything
+in `module.eks` changes, which makes Terraform show their dependents as
+"known after apply" without there being a real diff). To confirm that
+after applying, diff the actual IAM trust policy before and after:
+
+```bash
+# Before apply, for each of the three IRSA roles (note the LBC role's real
+# name - it is NOT "eks-platform-staging-lbc"):
+for r in external-dns external-secrets aws-load-balancer-controller; do
+  aws iam get-role --role-name "eks-platform-staging-$r" \
+    --query 'Role.AssumeRolePolicyDocument' --profile pro \
+    > "/tmp/before-$r.json"
+done
+
+# ... run terraform apply phase3.tfplan ...
+
+# After apply, diff each - every one should be empty (no output = identical):
+for r in external-dns external-secrets aws-load-balancer-controller; do
+  aws iam get-role --role-name "eks-platform-staging-$r" \
+    --query 'Role.AssumeRolePolicyDocument' --profile pro \
+    > "/tmp/after-$r.json"
+  echo "=== $r ==="
+  diff "/tmp/before-$r.json" "/tmp/after-$r.json"
+done
+```
+
+If any of the three produce non-empty `diff` output, the "cosmetic"
+explanation above is wrong for that role and it needs real investigation -
+don't assume it's benign a second time without checking.
+
+**Verified post-apply:** `external-secrets` was byte-identical;
+`external-dns` and `aws-load-balancer-controller` differed only in JSON key
+order (`sub`/`aud` reordered within the same `Condition.StringEquals`
+block, identical values) - confirmed cosmetic, not a real change.
+
 ## `terraform.tfvars`
 
 Committed, and contains no secrets - just region/profile and the pinned

@@ -5,6 +5,14 @@ locals {
   # kubernetes.io/cluster/<name> subnet discovery tag below, before the eks
   # module (which owns the real cluster name) exists.
   cluster_name = "${var.project}-${var.environment}"
+
+  # Kubernetes group ci_deploy's access entry is tagged with, so
+  # modules/addons' ci_deploy_rbac.tf can bind a namespaced RoleBinding to
+  # a stable group name instead of the access entry's per-session-variable
+  # `username` - see the access_entries variable doc in modules/eks for why
+  # that distinction matters. Defined once, here, and passed to both
+  # modules so they can never disagree with each other.
+  ci_deploy_k8s_group = "${var.project}-ci-deploy"
 }
 
 # Never write the account ID literally - CLAUDE.md §2. Used below for the
@@ -74,6 +82,11 @@ module "eks" {
       access_policy     = "AmazonEKSEditPolicy"
       access_scope_type = "namespace"
       namespaces        = ["staging"]
+      # AmazonEKSEditPolicy does not cover external-secrets.io (confirmed
+      # against AWS's own published permission table for this policy -
+      # see CHALLENGES.md). This group is what modules/addons'
+      # ci_deploy_rbac.tf binds its supplementary Role to.
+      kubernetes_groups = [local.ci_deploy_k8s_group]
     }
   }
 }
@@ -119,6 +132,8 @@ module "addons" {
   hosted_zone_id = data.terraform_remote_state.persistent.outputs.hosted_zone_id
 
   rds_master_user_secret_arn = module.rds.master_user_secret_arn
+
+  ci_deploy_kubernetes_group = local.ci_deploy_k8s_group
 
   # Module-level depends_on, not per-resource: this module's helm_release
   # resources can't reference module.eks.aws_eks_node_group.default

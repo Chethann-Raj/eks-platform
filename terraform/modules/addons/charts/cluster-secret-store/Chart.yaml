@@ -1,0 +1,5 @@
+apiVersion: v2
+name: cluster-secret-store
+description: ClusterSecretStore for the RDS master user secret - cluster-scoped, owned by Terraform, never by the CI role
+type: application
+version: 0.1.0

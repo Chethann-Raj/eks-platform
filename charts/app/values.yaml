@@ -1,0 +1,50 @@
+# image.repository/tag are always set explicitly at deploy time
+# (.github/workflows/deploy.yml: --set image.repository=<ecr-repo-url>
+# --set image.tag=<git-sha>). ECR is IMMUTABLE (terraform/persistent) -
+# tag is always the commit SHA, never "latest".
+image:
+  repository: ""
+  tag: ""
+
+replicaCount: 2
+
+port: 8080
+
+# host/port/name are not secret - set at deploy time from the rds module's
+# Terraform outputs. secretArn is the RDS-managed master user secret's ARN
+# (also an rds module output) - used only by the ExternalSecret below to
+# fetch username/password; it is not itself a credential.
+database:
+  host: ""
+  port: "5432"
+  name: "app"
+  secretArn: ""
+
+# Nodes are m7i-flex.large (2 vCPU / 8Gi), 3 of them, SPOT. This is a
+# lightweight API with no heavy computation - requests are set low enough
+# that 2 baseline replicas plus headroom for the HPA's burst to 6 replicas
+# comfortably fit alongside the DaemonSets (kube-proxy, aws-node) and
+# controllers (LBC, ExternalDNS, ESO) already on every node.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 300m
+    memory: 256Mi
+
+autoscaling:
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  # maxUnavailable, never minAvailable: 1 against a baseline of 2 replicas -
+  # CLAUDE.md §12. minAvailable: 1 here would block node drain indefinitely
+  # the moment the HPA ever scales back down to 2.
+  maxUnavailable: 1
+
+ingress:
+  host: chethanraj.site
+  # ACM cert ARN (persistent layer's wildcard cert) - set at deploy time.
+  certificateArn: ""

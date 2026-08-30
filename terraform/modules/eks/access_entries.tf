@@ -5,8 +5,9 @@
 resource "aws_eks_access_entry" "this" {
   for_each = var.access_entries
 
-  cluster_name  = aws_eks_cluster.this.name
-  principal_arn = each.value.principal_arn
+  cluster_name      = aws_eks_cluster.this.name
+  principal_arn     = each.value.principal_arn
+  kubernetes_groups = each.value.kubernetes_groups
 }
 
 resource "aws_eks_access_policy_association" "this" {

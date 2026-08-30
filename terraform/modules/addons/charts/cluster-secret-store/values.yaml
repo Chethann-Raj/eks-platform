@@ -1,0 +1,13 @@
+# Real default, not empty: this chart previously had no values.yaml at
+# all, so metadata.name only ever had a value because
+# cluster_secret_store.tf's `set` block happened to supply one - `helm
+# template`/`helm lint` run standalone (no --set) would otherwise render
+# an empty metadata.name. "aws-secrets-manager" matches the name already
+# live on the cluster (confirmed Ready) and referenced by
+# charts/app/templates/externalsecret.yaml's secretStoreRef.name - all
+# three must agree, since metadata.name is immutable and a mismatch here
+# would force a replace for no reason.
+name: aws-secrets-manager
+
+# No safe default - always supplied explicitly via var.aws_region.
+region: ""

@@ -1,3 +1,16 @@
+data "aws_caller_identity" "current" {}
+
+locals {
+  # "staging" is hardcoded here, not read from envs/staging's remote state:
+  # persistent must never depend on staging's state (staging depends on
+  # persistent via terraform_remote_state, not the other way around - a
+  # circular dependency would mean neither could ever apply first). This
+  # must match envs/staging's own computed cluster name
+  # ("${var.project}-${var.environment}" there, with environment =
+  # "staging") - if that ever changes, update this too.
+  staging_cluster_arn = "arn:aws:eks:${var.aws_region}:${data.aws_caller_identity.current.account_id}:cluster/${var.project}-staging"
+}
+
 # GitHub's OIDC token-issuing endpoint. Fetched dynamically rather than
 # hardcoding a thumbprint, which rotates whenever GitHub's TLS cert renews.
 data "tls_certificate" "github_actions" {
@@ -50,9 +63,58 @@ data "aws_iam_policy_document" "ci_deploy_trust" {
 resource "aws_iam_role" "ci_deploy" {
   name               = "${var.project}-ci-deploy"
   assume_role_policy = data.aws_iam_policy_document.ci_deploy_trust.json
+}
 
-  # No permission policy attached yet - Phase 3 attaches least-privilege
-  # policies (ECR push, EKS auth) once the exact workflow actions are defined.
+# Phase 3: .github/workflows/deploy.yml needs to (1) push an image to ECR
+# and (2) authenticate to the EKS API server to run `helm upgrade`. Nothing
+# else - it never calls AWS to read RDS/ACM/ECR endpoint values (those are
+# passed in as GitHub Actions repository variables, set once from Terraform
+# output, rather than granted as read permissions this role doesn't
+# otherwise need).
+data "aws_iam_policy_document" "ci_deploy_permissions" {
+  statement {
+    sid    = "ECRAuth"
+    effect = "Allow"
+    # ecr:GetAuthorizationToken returns a short-lived Docker login token,
+    # not access to any specific repository - AWS does not support
+    # resource-level permissions for this action (CLAUDE.md §2).
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "ECRPushThisRepoOnly"
+    effect = "Allow"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:BatchGetImage",
+      "ecr:InitiateLayerUpload",
+      "ecr:UploadLayerPart",
+      "ecr:CompleteLayerUpload",
+      "ecr:PutImage",
+      # Backs the describe-images guard in deploy.yml: ECR is IMMUTABLE, so
+      # PutImage on a tag that already exists (a re-run of this workflow
+      # for the same commit, after an earlier run failed at `helm upgrade`
+      # rather than at the build) throws ImageAlreadyExistsException. The
+      # workflow checks first and skips the build+push in that case.
+      "ecr:DescribeImages",
+    ]
+    resources = [aws_ecr_repository.app.arn]
+  }
+
+  statement {
+    sid       = "EKSAuth"
+    effect    = "Allow"
+    actions   = ["eks:DescribeCluster"]
+    resources = [local.staging_cluster_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "ci_deploy_permissions" {
+  name   = "${var.project}-ci-deploy"
+  role   = aws_iam_role.ci_deploy.id
+  policy = data.aws_iam_policy_document.ci_deploy_permissions.json
 }
 
 # --- Production role: assumed only by a job using the "production" ---------

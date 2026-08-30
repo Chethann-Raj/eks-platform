@@ -48,3 +48,8 @@ variable "rds_master_user_secret_arn" {
   description = "Secrets Manager ARN of the RDS-managed master user secret, from the rds module. Scopes External Secrets Operator's IRSA role to exactly this one secret - no wildcards."
   type        = string
 }
+
+variable "ci_deploy_kubernetes_group" {
+  description = "Kubernetes group name assigned to the ci_deploy access entry (modules/eks's access_entries kubernetes_groups) - ci_deploy_rbac.tf binds its Role to this group, not to the access entry's raw username (which is a per-session template, not a stable string - see modules/eks's access_entries variable doc)."
+  type        = string
+}
