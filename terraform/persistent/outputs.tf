@@ -32,3 +32,8 @@ output "ci_production_role_arn" {
   description = "Role assumed by prod.yml (workflow_dispatch, production environment)."
   value       = aws_iam_role.ci_production.arn
 }
+
+output "eks_kms_key_arn" {
+  description = "KMS key ARN for EKS Kubernetes Secrets encryption - pass to the eks module's kms_key_arn variable. IRREVERSIBLE: never schedule this key for deletion while any cluster's encryption_config still references it. Doing so permanently breaks decryption of every Kubernetes Secret encrypted with it, with no recovery path once the deletion window elapses."
+  value       = aws_kms_key.eks.arn
+}

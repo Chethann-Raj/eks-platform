@@ -1,6 +1,13 @@
 resource "aws_ecr_repository" "app" {
   name = var.ecr_repository_name
 
+  # prod.yml promotes an existing SHA-tagged image without rebuilding, so a tag
+  # must permanently mean one image. Mutable tags could let a re-run of main.yml
+  # silently replace what production is about to promote. Also satisfies
+  # Checkov CKV_AWS_51.
+
+  image_tag_mutability = "IMMUTABLE"
+
   image_scanning_configuration {
     scan_on_push = true
   }

@@ -13,3 +13,4 @@ override.tf.json
 __pycache__/
 .venv/
 .env
+*.tfplan

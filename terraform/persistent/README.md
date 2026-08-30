@@ -32,6 +32,23 @@ Same as `terraform/bootstrap`: run
 after `init` so the committed lock file works both on this Mac and on
 GitHub Actions' `ubuntu-latest` runners.
 
+## EKS Kubernetes Secrets encryption key
+
+`aws_kms_key.eks` (`kms.tf`) lives here rather than in
+`terraform/modules/eks/`, because `envs/staging` is destroyed nightly: a key
+scheduled for deletion keeps its alias allocated for the entire deletion
+window, so the next rebuild's `terraform apply` would fail trying to
+recreate `alias/eks-platform-eks-secrets` - and every nightly teardown would
+leave behind another billable key sitting in `PendingDeletion`. The eks
+module takes this key's ARN as `var.kms_key_arn`, an input, not something it
+creates.
+
+**This is irreversible.** Once a cluster's `encryption_config` references
+this key, scheduling it for deletion permanently breaks decryption of every
+Kubernetes Secret encrypted with it - there is no recovery once the deletion
+window elapses. Never run `terraform destroy` against this key (or this
+whole persistent layer) while a live cluster still references it.
+
 ## What's deliberately not here yet
 
 The two IAM roles (`ci_deploy`, `ci_production`) have trust policies only.
