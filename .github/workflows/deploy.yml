@@ -52,13 +52,25 @@ jobs:
           ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          if aws ecr describe-images \
+          set +e
+          DESCRIBE_STDERR=$(aws ecr describe-images \
               --repository-name "$ECR_REPOSITORY" \
               --image-ids imageTag="$IMAGE_TAG" \
-              --region "${{ vars.AWS_REGION }}" >/dev/null 2>&1; then
+              --region "${{ vars.AWS_REGION }}" 2>&1 >/dev/null)
+          DESCRIBE_STATUS=$?
+          set -e
+
+          if [ "$DESCRIBE_STATUS" -eq 0 ]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
+          elif echo "$DESCRIBE_STDERR" | grep -q "ImageNotFoundException"; then
             echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            # Any other failure (auth, throttling, wrong repo name, ...) is
+            # not "the image doesn't exist yet" - failing loudly here beats
+            # silently falling through to a build+push that may then also
+            # fail for the same underlying reason, or worse, mask it.
+            echo "::error::aws ecr describe-images failed for a reason other than ImageNotFoundException: $DESCRIBE_STDERR"
+            exit 1
           fi
 
       - name: Build and push image
@@ -100,8 +112,8 @@ jobs:
           helm upgrade --install app charts/app \
             --namespace staging \
             --wait \
-            --atomic \
-            --timeout 5m \
+            --rollback-on-failure \
+            --timeout 10m \
             --set image.repository="$ECR_REGISTRY/$ECR_REPOSITORY" \
             --set image.tag="$IMAGE_TAG" \
             --set database.host="${{ vars.RDS_HOST }}" \
@@ -110,3 +122,56 @@ jobs:
             --set database.secretArn="${{ vars.RDS_SECRET_ARN }}" \
             --set ingress.certificateArn="${{ vars.ACM_CERTIFICATE_ARN }}" \
             --set ingress.host="${{ vars.APP_HOSTNAME }}"
+
+      # Two separate poll loops, deliberately not merged: an ALB that never
+      # gets provisioned (AWS Load Balancer Controller / IAM / subnet
+      # tagging) and a site that never answers once the ALB exists (DNS
+      # propagation, ExternalDNS, target-group health, ACM) are different
+      # failure domains with different fixes - the log needs to say which
+      # one broke, not just "smoke test failed".
+      - name: Smoke test
+        if: success()
+        run: |
+          set -euo pipefail
+
+          echo "Waiting for Ingress 'app' to be assigned an ALB hostname (max 5m, 10s interval)..."
+          ALB_HOSTNAME=""
+          for i in $(seq 1 30); do
+            ALB_HOSTNAME=$(kubectl -n staging get ingress app \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' || true)
+            echo "  [$i/30] ingress hostname: '${ALB_HOSTNAME:-<empty>}'"
+            if [ -n "$ALB_HOSTNAME" ]; then
+              break
+            fi
+            sleep 10
+          done
+          if [ -z "$ALB_HOSTNAME" ]; then
+            echo "::error::Ingress 'app' never got an ALB hostname after 5 minutes - this is ALB provisioning (AWS Load Balancer Controller), not DNS."
+            exit 1
+          fi
+          echo "ALB hostname: $ALB_HOSTNAME"
+
+          echo "Waiting for https://${{ vars.APP_HOSTNAME }} to return 200 (max 5m, 15s interval)..."
+          HTTP_CODE=""
+          for i in $(seq 1 20); do
+            HTTP_CODE=$(curl -fsS -o /dev/null -w '%{http_code}' "https://${{ vars.APP_HOSTNAME }}" || true)
+            echo "  [$i/20] http_code: '${HTTP_CODE:-<none>}'"
+            if [ "$HTTP_CODE" = "200" ]; then
+              break
+            fi
+            sleep 15
+          done
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::https://${{ vars.APP_HOSTNAME }} never returned 200 after 5 minutes (last code: '${HTTP_CODE:-<none>}') - ALB hostname resolved fine above, so look at DNS/ExternalDNS, target-group health, or the ACM certificate, not ALB provisioning."
+            exit 1
+          fi
+          echo "Site responded 200."
+
+          echo "Verifying the response body reflects a real DB read..."
+          BODY=$(curl -fsS "https://${{ vars.APP_HOSTNAME }}/api/stats")
+          echo "  body: $BODY"
+          if ! echo "$BODY" | grep -q '"visits"'; then
+            echo "::error::Response body is missing the DB-backed 'visits' field (app/main.py's /api/stats endpoint) - got: $BODY"
+            exit 1
+          fi
+          echo "Smoke test passed."
