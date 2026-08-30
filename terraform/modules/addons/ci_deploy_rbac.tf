@@ -20,7 +20,14 @@ resource "kubernetes_role_v1" "ci_deploy_external_secrets" {
   rule {
     api_groups = ["external-secrets.io"]
     resources  = ["externalsecrets"]
-    verbs      = ["create", "get", "list", "patch", "update", "delete"]
+    # `watch` was missing here and broke every automated deploy: Helm 4's
+    # --wait uses a generic kstatus-based waiter that watches every
+    # resource a release creates, custom resources included, not just a
+    # fixed list of built-in kinds - not something apparent from reading
+    # this Role in isolation, only from the actual failure it caused
+    # (run 33335905391): "cannot watch resource "externalsecrets" ...
+    # uninstallation completed with 1 error(s)" during --atomic's rollback.
+    verbs = ["create", "get", "list", "watch", "patch", "update", "delete"]
   }
 }
 

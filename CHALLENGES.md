@@ -570,3 +570,103 @@ form.** Once a real deploy run succeeds and CloudTrail's
 matched, the condition should be narrowed back down to that one value -
 carrying both indefinitely is unnecessary surface area once it's known
 which format GitHub is really sending for this repo.
+
+### First real deploy attempt (run 33335905391): two separate, real bugs in one rollback
+
+OIDC fixed, image built and pushed
+(`dc4c5e66cc3f71bdafbabf5ce3422b785551d164`), and the workflow still
+failed - `--atomic` rolled everything back. The GitHub Actions log and
+`kubectl get events` (read before the rollback tore the evidence down)
+told two different, both-true stories, and conflating them would have
+meant fixing the wrong thing first.
+
+**Bug A - the actual reason the run's exit code was non-zero:**
+
+```
+Error: an error occurred while uninstalling the release. original install error:
+externalsecrets.external-secrets.io is forbidden: User
+"arn:aws:sts::<ACCOUNT_ID>:assumed-role/eks-platform-ci-deploy/GitHubActions"
+cannot watch resource "externalsecrets" in API group "external-secrets.io"
+in the namespace "staging"
+```
+
+`ci_deploy_rbac.tf`'s `Role` granted `create/get/list/patch/update/delete`
+on `externalsecrets` but not `watch`. Helm 4's `--wait` uses a generic
+kstatus-based waiter (from the `cli-utils` project) that watches *every*
+resource a release creates to determine rollout status - custom resources
+included, not a fixed list of built-in kinds. This wasn't visible from
+reading the Role in isolation; only the actual failure surfaced it.
+**Fix:** added `watch` to that Role's verb list.
+
+**Bug B - observed via `kubectl get events`, absent from the CI log
+entirely:**
+
+```
+FailedMount: secret "app-db-credentials" not found     (race - resolved; see below)
+externalsecret/app-db-credentials: secret created
+Pulled image ... Container started
+Readiness probe failed: Get "http://10.0.11.143:8080/readyz": EOF
+```
+
+An EOF - connection accepted, closed with no response - not a 503 and not
+a timeout, meant the worker process died handling the request rather than
+`/readyz` returning a failure status. `/readyz`'s own DB check already had
+a `try/except` returning 503 correctly - the crash had to be coming from
+somewhere else. It was: `main.py`'s `@app.on_event("startup")` handler
+(`_ensure_schema`) had **no error handling at all**. An uncaught exception
+in an ASGI lifespan startup handler is fatal to uvicorn - the whole
+process dies, not just that one operation - and a readiness probe that
+then hits a dying/dead process gets a bare connection reset, not an HTTP
+response. The likely trigger was the `FailedMount` race itself: if the
+mounted Secret volume was still empty (or the mount not yet complete) at
+the exact moment `_ensure_schema()` ran, `_read_credential()` raising
+`FileNotFoundError` would have taken the whole process down.
+
+**Could not get a literal traceback from the actual failing pod** -
+`--atomic` deleted it before it could be inspected, and `kubectl logs`
+can't retrieve output from a pod that no longer exists. Said so plainly
+rather than fabricate one. A manual `helm upgrade --install` (no
+`--atomic`, no `--wait`, exact `--set` values pulled from the run log, not
+guessed) did not reproduce the crash - both pods came up `1/1 Running`
+with `/readyz` returning `200` repeatedly from the first check onward.
+Verified explicitly rather than assumed: mount path (`/etc/secrets/db`),
+`db.py`'s read path, and the `ExternalSecret`'s `secretKey` names all
+agree exactly; a throwaway `psql` pod in `staging` (deleted after) reached
+RDS and got a real Postgres-protocol auth rejection (not a network
+timeout), proving reachability from this namespace, not just from an
+earlier ad-hoc pod in `default`.
+
+**Fix:** moved the `CREATE TABLE IF NOT EXISTS` / seed-row logic into a
+plain `_ensure_schema(conn)` function called from both places: the startup
+handler now wraps it in `try/except` and only logs a warning on failure
+(never raises), and `/readyz` calls the same function on every request
+before its `SELECT 1` check, so schema setup self-heals the moment the DB
+becomes reachable - no pod restart needed, and no code path left that can
+take the process down on a DB hiccup. Verified locally (not just read) by
+rebuilding the image and running it against a deliberately unreachable DB:
+the process logged the exception and reached "Application startup
+complete" instead of dying, `/healthz` returned `200`, `/readyz` returned
+a clean `503` (not a dropped connection), and the container stayed up
+through both requests. Then verified the happy path is unaffected against
+a real throwaway Postgres: clean startup, `/readyz` `200`, `/` performing
+a real read/write. This is the reconsideration asked for directly: a
+readiness probe that kills the connection is strictly worse to operate
+than one that answers honestly, and the fix is to remove every code path
+that *can* kill the connection, not to add more guessing at the caller.
+
+**The `FailedMount` race itself is confirmed observed, not hypothetical** -
+it's in the events above, and it did resolve on its own (the `secret
+created` event follows it). The Phase 3 decision to accept this via
+kubelet's ordinary retry loop (Option B, no `helm.sh/hook` - see the
+earlier "Secret mount race on first deploy" entry) held: the mount
+eventually succeeded well within the deploy's timeout window. What Option
+B's original write-up didn't anticipate was a *second* failure mode
+stacked on top of it - an unrelated bug (Bug B above) turning a
+successfully-resolved race into a process crash. The race resolving as
+designed and the app surviving that resolution are two different
+guarantees; Option B only ever provided the first one.
+
+All manual diagnostic artifacts (the `helm install` done to reproduce
+this, the throwaway `psql` pod, local Docker containers/network) were torn
+down after use - nothing left running outside the CI/Terraform-managed
+path.
