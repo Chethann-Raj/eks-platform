@@ -48,3 +48,16 @@ ingress:
   host: chethanraj.site
   # ACM cert ARN (persistent layer's wildcard cert) - set at deploy time.
   certificateArn: ""
+
+serviceMonitor:
+  enabled: true
+  # kube-prometheus-stack's Prometheus CR defaults
+  # serviceMonitorSelectorNilUsesHelmValues: true, which makes the
+  # generated selector `matchLabels: {release: <helm release name>}`
+  # regardless of what prometheus.prometheusSpec.serviceMonitorSelector is
+  # set to (confirmed against the pinned 88.6.1 chart's own
+  # templates/prometheus/prometheus.yaml) - so this ServiceMonitor must
+  # carry that label to ever be picked up. Must match
+  # helm_release.kube_prometheus_stack's `name` in
+  # terraform/modules/addons/observability.tf.
+  releaseLabel: kube-prometheus-stack

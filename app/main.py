@@ -9,12 +9,14 @@ import logging
 
 from fastapi import FastAPI, Response, status
 from fastapi.responses import HTMLResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 
 import db
 
 logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI()
+Instrumentator().instrument(app).expose(app)
 
 
 def _ensure_schema(conn: "db.psycopg.Connection") -> None:

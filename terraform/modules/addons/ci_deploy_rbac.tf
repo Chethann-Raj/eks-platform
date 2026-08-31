@@ -29,6 +29,19 @@ resource "kubernetes_role_v1" "ci_deploy_external_secrets" {
     # uninstallation completed with 1 error(s)" during --atomic's rollback.
     verbs = ["create", "get", "list", "watch", "patch", "update", "delete"]
   }
+
+  # Same gap, same fix, different API group: AmazonEKSEditPolicy doesn't
+  # cover monitoring.coreos.com either (same AWS permission table, same
+  # absence of a wildcard apiGroup rule), and charts/app/templates/
+  # servicemonitor.yaml now makes ci_deploy's `helm upgrade` create/update
+  # a ServiceMonitor in this namespace. Verbs copied verbatim from the
+  # external-secrets.io rule above, watch included, rather than
+  # rediscovering the same Helm 4 kstatus-waiter failure a second time.
+  rule {
+    api_groups = ["monitoring.coreos.com"]
+    resources  = ["servicemonitors"]
+    verbs      = ["create", "get", "list", "watch", "patch", "update", "delete"]
+  }
 }
 
 # Bound to a Kubernetes Group, not to the access entry's `username`. For a

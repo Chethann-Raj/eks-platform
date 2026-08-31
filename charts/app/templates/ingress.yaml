@@ -13,6 +13,15 @@ metadata:
     alb.ingress.kubernetes.io/certificate-arn: {{ .Values.ingress.certificateArn | quote }}
     alb.ingress.kubernetes.io/healthcheck-path: /healthz
     external-dns.alpha.kubernetes.io/hostname: {{ .Values.ingress.host | quote }}
+    # /metrics is scraped in-cluster only, via the ServiceMonitor
+    # (templates/servicemonitor.yaml) hitting the Service directly - it has
+    # no business being reachable through the public ALB. The "/" rule
+    # below is a Prefix match and would otherwise forward it straight
+    # through: an ALB Ingress with a single "/" Prefix rule matches every
+    # path on the host, /metrics included. This action returns a plain 404
+    # instead; its path rule is listed before "/" below so it wins - ALB
+    # listener rule priority follows path list order.
+    alb.ingress.kubernetes.io/actions.block-metrics: '{"type":"fixed-response","fixedResponseConfig":{"contentType":"text/plain","statusCode":"404","messageBody":"not found"}}'
 spec:
   # The "alb" IngressClass is created by the LBC chart itself
   # (createIngressClassResource: true, its own default) -
@@ -22,6 +31,13 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
+          - path: /metrics
+            pathType: Exact
+            backend:
+              service:
+                name: block-metrics
+                port:
+                  name: use-annotation
           - path: /
             pathType: Prefix
             backend:
