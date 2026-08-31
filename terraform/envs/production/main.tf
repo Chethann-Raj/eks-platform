@@ -121,12 +121,15 @@ module "rds" {
   # this environment needs otherwise.
   kms_key_arn = null
 
-  # The rds module's defaults are production-oriented (see its README).
-  # This environment is destroyed and rebuilt nightly, so all three are
-  # explicitly overridden here rather than left at the module's defaults.
-  deletion_protection     = false # staging only, nightly teardown
-  skip_final_snapshot     = true  # staging only, nightly teardown
-  backup_retention_period = 0     # staging only, nightly teardown
+  # Unlike envs/staging, this environment is not torn down nightly - these
+  # were copied from envs/staging/main.tf's overrides (see CHALLENGES.md)
+  # and left the database with no deletion protection, no final snapshot on
+  # destroy, and zero backup retention. Set explicitly here instead of left
+  # at the rds module's own defaults so the intent is visible in this file
+  # without having to go read the module.
+  deletion_protection     = true
+  skip_final_snapshot     = false
+  backup_retention_period = 7
 }
 
 module "addons" {
