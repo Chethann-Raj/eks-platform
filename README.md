@@ -12,6 +12,44 @@ The live site is https://chethanraj.site, a server-rendered landing page
 that reads and writes a visit counter in Postgres on every load, so a 200
 response is a real end-to-end check, not a static page.
 
+## Architecture
+
+```mermaid
+flowchart TB
+    user([Browser]) --> r53["Route53<br/>chethanraj.site"]
+    r53 --> alb
+
+    subgraph vpc["VPC 10.0.0.0/16 · ap-south-1 · 2 AZs"]
+        subgraph public["Public subnets"]
+            alb["ALB<br/>TLS via ACM"]
+            nat["NAT Gateway"]
+        end
+
+        subgraph private["Private subnets"]
+            subgraph eks["EKS 1.35 · Spot node group"]
+                app["app pods<br/>FastAPI · 2 replicas"]
+                addons["LBC · ExternalDNS · ESO"]
+                obs["Prometheus · Grafana<br/>Loki · promtail"]
+            end
+            rds[("RDS Postgres 16.15<br/>private, not public")]
+        end
+    end
+
+    alb -->|"/ → app<br/>/metrics → 404"| app
+    app --> rds
+    app -.scraped.-> obs
+    addons -.->|creates| alb
+    addons -.->|A/AAAA records| r53
+    addons -.->|RDS password| sm["Secrets Manager"]
+    nat --> internet([Internet])
+
+    gha["GitHub Actions"] -.->|OIDC, no static keys| ecr[("ECR<br/>tag-immutable")]
+    gha -.->|helm upgrade| app
+    ecr -.->|image pull| app
+
+    classDef ext fill:#f8f8f8,stroke:#999,color:#333
+    class user,internet,gha,ecr,sm,r53 ext
+
 ## Contents
 
 - [Setup](#setup)
