@@ -164,8 +164,8 @@ def _render_page(visits_display: str) -> str:
   <h1>Chethan R</h1>
   <p class="headline">DevOps / Site Reliability Engineer &middot; Bangalore</p>
   <p class="bio">
-    ~3 years across GrowJunction, 247.ai, and Card91 (a PCI DSS-regulated
-    payment card issuer). AWS Solutions Architect Associate.
+    ~3 years of DevOps / SRE experience, including in PCI DSS-regulated
+    payments. AWS Solutions Architect Associate.
   </p>
 
   <section>
