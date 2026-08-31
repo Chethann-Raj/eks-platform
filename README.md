@@ -49,6 +49,8 @@ flowchart TB
 
     classDef ext fill:#f8f8f8,stroke:#999,color:#333
     class user,internet,gha,ecr,sm,r53 ext
+```
+
 
 ## Contents
 
