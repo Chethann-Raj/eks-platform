@@ -107,6 +107,7 @@ def _render_page(visits_display: str) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 <title>Chethan R - DevOps / SRE</title>
 <style>
   :root {{
@@ -131,7 +132,12 @@ def _render_page(visits_display: str) -> str:
   main {{ max-width: 700px; width: 100%; }}
   h1 {{ margin: 0 0 0.15rem; font-size: 2rem; }}
   .headline {{ color: var(--accent); margin: 0 0 1rem; font-size: 1.05rem; }}
-  .bio {{ color: var(--muted); margin: 0 0 1.75rem; }}
+  .bio {{
+    color: var(--muted);
+    margin: 0 0 1.75rem;
+    max-width: 60ch;
+    text-wrap: pretty;
+  }}
   section {{
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -171,7 +177,7 @@ def _render_page(visits_display: str) -> str:
   <section>
     <h2>This page is the demo</h2>
     <ul>
-      <li>EKS cluster provisioned entirely from Terraform - no manual console steps</li>
+      <li>VPC, EKS cluster, and RDS Postgres provisioned from Terraform</li>
       <li>GitHub Actions deploys via OIDC - no long-lived AWS keys in CI</li>
       <li>AWS Load Balancer Controller + ExternalDNS + ACM route and secure this exact page</li>
       <li>External Secrets Operator pulls the RDS password live from AWS Secrets Manager</li>
