@@ -2,9 +2,15 @@
 # (.github/workflows/deploy.yml: --set image.repository=<ecr-repo-url>
 # --set image.tag=<git-sha>). ECR is IMMUTABLE (terraform/persistent) -
 # tag is always the commit SHA, never "latest".
+#
+# digest is empty by default (staging deploys by tag, per above). The
+# `production` job sets it explicitly to the exact digest the staging run
+# already resolved and validated - see templates/deployment.yaml's image
+# line for the digest-wins-over-tag logic.
 image:
   repository: ""
   tag: ""
+  digest: ""
 
 replicaCount: 2
 

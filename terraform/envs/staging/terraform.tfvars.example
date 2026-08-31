@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and adjust if needed. terraform.tfvars itself is
+# gitignored (CLAUDE.md §9), so a fresh clone has nothing to plan against
+# without this file to copy from.
+#
+# Every variable below already has a matching default in variables.tf - none
+# of this is strictly required for `terraform plan` to run. It's here so a
+# fresh clone has something explicit to look at and override, rather than
+# needing to go read variables.tf first to discover what exists.
+
+aws_region         = "ap-south-1"
+aws_profile        = "pro"
+project            = "eks-platform"
+environment        = "staging"
+kubernetes_version = "1.35"
+engine_version     = "16.15"
+instance_class     = "db.t4g.micro"

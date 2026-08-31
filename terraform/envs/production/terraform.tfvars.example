@@ -1,0 +1,23 @@
+# Copy to terraform.tfvars and adjust if needed. terraform.tfvars itself is
+# gitignored (CLAUDE.md §9), so a fresh clone has nothing to plan against
+# without this file to copy from.
+#
+# environment MUST be "production" here. variables.tf's own default for it
+# was "staging" until this pass (copied from envs/staging/variables.tf and
+# never updated - see CHALLENGES.md) - a fresh `terraform plan` run in this
+# directory with no terraform.tfvars present would have silently planned a
+# second "eks-platform-staging"-named environment instead of failing loudly,
+# colliding with the real one. The default is fixed now too, but this file
+# exists to make it explicit regardless.
+#
+# instance_class is a placeholder matching staging's - CLAUDE.md doesn't
+# specify production RDS sizing, so this hasn't been deliberately chosen for
+# production load and should be reviewed before this environment goes live.
+
+aws_region         = "ap-south-1"
+aws_profile        = "pro"
+project            = "eks-platform"
+environment        = "production"
+kubernetes_version = "1.35"
+engine_version     = "16.15"
+instance_class     = "db.t4g.micro"

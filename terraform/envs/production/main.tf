@@ -6,13 +6,15 @@ locals {
   # module (which owns the real cluster name) exists.
   cluster_name = "${var.project}-${var.environment}"
 
-  # Kubernetes group ci_deploy's access entry is tagged with, so
+  # Kubernetes group the ci_production access entry is tagged with, so
   # modules/addons' ci_deploy_rbac.tf can bind a namespaced RoleBinding to
   # a stable group name instead of the access entry's per-session-variable
   # `username` - see the access_entries variable doc in modules/eks for why
-  # that distinction matters. Defined once, here, and passed to both
-  # modules so they can never disagree with each other.
-  ci_deploy_k8s_group = "${var.project}-ci-deploy"
+  # that distinction matters. "eks-platform-ci-production", not
+  # "eks-platform-ci-deploy" (staging's group, ${var.project}-ci-deploy) -
+  # this was copy-pasted from envs/staging/main.tf without being updated,
+  # same bug as the principal_arn below. See CHALLENGES.md.
+  ci_production_k8s_group = "${var.project}-ci-production"
 }
 
 # Never write the account ID literally - CLAUDE.md §2. Used below for the
@@ -77,16 +79,27 @@ module "eks" {
       access_policy     = "AmazonEKSClusterAdminPolicy"
       access_scope_type = "cluster"
     }
-    ci_deploy = {
-      principal_arn     = data.terraform_remote_state.persistent.outputs.ci_deploy_role_arn
+    # ci_production, not ci_deploy - this file was originally copy-pasted
+    # from envs/staging/main.tf and referenced the STAGING role
+    # (ci_deploy_role_arn) scoped to the STAGING namespace here, which would
+    # have granted this cluster's edit access to the wrong role entirely
+    # (one whose trust policy doesn't even permit assuming it from a
+    # production-environment-gated job) and pointed it at a namespace that
+    # doesn't exist in this cluster. Fixed to reference
+    # ci_production_role_arn (terraform/persistent/oidc.tf's
+    # aws_iam_role.ci_production, trusted only for `sub:
+    # ...:environment:production`) scoped to the "production" namespace.
+    # See CHALLENGES.md.
+    ci_production = {
+      principal_arn     = data.terraform_remote_state.persistent.outputs.ci_production_role_arn
       access_policy     = "AmazonEKSEditPolicy"
       access_scope_type = "namespace"
-      namespaces        = ["staging"]
+      namespaces        = ["production"]
       # AmazonEKSEditPolicy does not cover external-secrets.io (confirmed
       # against AWS's own published permission table for this policy -
       # see CHALLENGES.md). This group is what modules/addons'
       # ci_deploy_rbac.tf binds its supplementary Role to.
-      kubernetes_groups = [local.ci_deploy_k8s_group]
+      kubernetes_groups = [local.ci_production_k8s_group]
     }
   }
 }
@@ -133,7 +146,7 @@ module "addons" {
 
   rds_master_user_secret_arn = module.rds.master_user_secret_arn
 
-  ci_deploy_kubernetes_group = local.ci_deploy_k8s_group
+  ci_deploy_kubernetes_group = local.ci_production_k8s_group
 
   # Module-level depends_on, not per-resource: this module's helm_release
   # resources can't reference module.eks.aws_eks_node_group.default

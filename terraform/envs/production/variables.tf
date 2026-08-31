@@ -17,9 +17,18 @@ variable "project" {
 }
 
 variable "environment" {
-  description = "Environment tag / naming prefix component. This is the nightly-teardown environment - see CLAUDE.md §6."
+  description = "Environment tag / naming prefix component. Unlike envs/staging, this environment is NOT torn down nightly - CLAUDE.md §6."
   type        = string
-  default     = "staging"
+  # Was "staging" - copied from envs/staging/variables.tf and never updated.
+  # terraform.tfvars overrides this correctly today (confirmed via
+  # `terraform console` - local.cluster_name resolves to
+  # "eks-platform-production"), but the default itself was a live landmine:
+  # a fresh clone running `terraform plan` in this directory with no
+  # terraform.tfvars present (it's gitignored - CLAUDE.md §9) would have
+  # silently planned a second "eks-platform-staging"-named environment
+  # instead of failing loudly, colliding with the real one. See
+  # terraform.tfvars.example in this directory and CHALLENGES.md.
+  default = "production"
 }
 
 variable "kubernetes_version" {

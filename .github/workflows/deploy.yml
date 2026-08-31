@@ -44,6 +44,13 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
+    outputs:
+      # Consumed by the `production` job below to deploy the exact bytes
+      # staging just ran, by digest - not by re-resolving the tag, which
+      # could in principle move (ECR immutability protects PutImage on this
+      # tag, not a promise that "resolve this tag again later" is
+      # meaningless - digest pinning removes that ambiguity entirely).
+      image_digest: ${{ steps.resolve_digest.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -107,6 +114,37 @@ jobs:
           set -euo pipefail
           docker build -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" app/
           docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+      # Runs unconditionally (no `if:`) - unlike the build step above, this
+      # must resolve the digest whether the image was just pushed by this
+      # run or already existed from an earlier one. Same guard shape as
+      # "Check if this commit's image already exists in ECR" above: capture
+      # stderr under `set +e`, restore `set -e`, then fail loudly with
+      # `::error::` on anything other than a clean resolution - a missing
+      # or empty digest here must never fall through into `production`
+      # deploying nothing/garbage by digest.
+      - name: Resolve pushed image digest
+        id: resolve_digest
+        env:
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set +e
+          DIGEST=$(aws ecr describe-images \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids imageTag="$IMAGE_TAG" \
+              --region "${{ vars.AWS_REGION }}" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text 2>&1)
+          DESCRIBE_STATUS=$?
+          set -e
+
+          if [ "$DESCRIBE_STATUS" -ne 0 ] || [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+            echo "::error::aws ecr describe-images failed to resolve a digest for tag $IMAGE_TAG: $DIGEST"
+            exit 1
+          fi
+
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Point kubectl/helm at the staging cluster
         run: |
@@ -199,3 +237,102 @@ jobs:
             exit 1
           fi
           echo "Smoke test passed."
+
+  # PRODUCTION_ENABLED is deliberately unset as a repository variable right
+  # now - an unset vars.* evaluates to an empty string, so this `if:` is
+  # false and the job renders in the run as "skipped", not stuck pending
+  # forever waiting on the "production" GitHub Environment's reviewers
+  # against a cluster (terraform/envs/production) that isn't fully wired up
+  # yet - see terraform/envs/production/main.tf's ci_deploy access entry
+  # and CHALLENGES.md for what's still missing. Flip vars.PRODUCTION_ENABLED
+  # to "true" only once that's resolved.
+  production:
+    needs: [test, deploy]
+    if: github.ref == 'refs/heads/main' && vars.PRODUCTION_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    # A required-reviewers GitHub Environment - already created out of band
+    # (not by this workflow or by Terraform; GitHub Environments aren't a
+    # Terraform-managed resource here). Declaring `environment:` is also
+    # what makes GitHub mint the OIDC token with `sub` ending in
+    # ":environment:production" rather than ":ref:refs/heads/main" -
+    # exactly the claim terraform/persistent/oidc.tf's
+    # data.aws_iam_policy_document.ci_production_trust checks for. url is
+    # informational only (shown as this job's environment link in the GitHub
+    # UI); it does not have to be a distinct hostname from staging's to be
+    # valid here.
+    environment:
+      name: production
+      url: https://chethanraj.site
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      # secrets.AWS_ACCOUNT_ID, not a literal account ID - this repo is
+      # public (CLAUDE.md §2/org policy: never commit the account ID).
+      # eks-platform-ci-production is the role
+      # terraform/persistent/oidc.tf's aws_iam_role.ci_production actually
+      # creates - there is no repository variable holding this ARN the way
+      # vars.CI_DEPLOY_ROLE_ARN does for the `deploy` job above; role name
+      # plus account ID is assembled here instead.
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/eks-platform-ci-production
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr_login
+        uses: aws-actions/amazon-ecr-login@v2.1.7
+
+      - name: Point kubectl/helm at the production cluster
+        run: |
+          aws eks update-kubeconfig \
+            --name eks-platform-production \
+            --region "${{ vars.AWS_REGION }}"
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5.0.1
+        with:
+          version: "v4.2.4"
+
+      # By digest (needs.deploy.outputs.image_digest), not by tag - see
+      # charts/app/templates/deployment.yaml and values.yaml's image.digest.
+      # No --create-namespace, same reasoning as the staging job's helm
+      # upgrade above: whatever IAM policy eks-platform-ci-production ends
+      # up with should stay namespace-scoped, not able to create namespaces
+      # cluster-wide. The "production" namespace itself needs to come from
+      # Terraform once terraform/modules/addons supports a namespace other
+      # than the "staging" it currently hardcodes (see CHALLENGES.md) - this
+      # step will fail against a missing namespace until that's done, which
+      # is fine while vars.PRODUCTION_ENABLED keeps this job from running at
+      # all.
+      #
+      # database.*/ingress.* below read from PROD_-prefixed repository
+      # variables, deliberately distinct from staging's vars.RDS_HOST etc. -
+      # reusing staging's variables here would point this release at
+      # staging's own RDS instance and certificate instead of production's
+      # own. None of these PROD_* variables exist yet either; configuring
+      # them is part of what has to happen before vars.PRODUCTION_ENABLED
+      # can safely flip to "true".
+      - name: helm upgrade --install
+        env:
+          ECR_REGISTRY: ${{ steps.ecr_login.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_DIGEST: ${{ needs.deploy.outputs.image_digest }}
+        run: |
+          helm upgrade --install app charts/app \
+            --namespace production \
+            --wait \
+            --rollback-on-failure \
+            --timeout 5m \
+            --set image.repository="$ECR_REGISTRY/$ECR_REPOSITORY" \
+            --set image.digest="$IMAGE_DIGEST" \
+            --set database.host="${{ vars.PROD_RDS_HOST }}" \
+            --set database.port="${{ vars.PROD_RDS_PORT }}" \
+            --set database.name="${{ vars.PROD_RDS_DB_NAME }}" \
+            --set database.secretArn="${{ vars.PROD_RDS_SECRET_ARN }}" \
+            --set ingress.certificateArn="${{ vars.PROD_ACM_CERTIFICATE_ARN }}" \
+            --set ingress.host="${{ vars.PROD_APP_HOSTNAME }}"

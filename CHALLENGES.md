@@ -918,3 +918,125 @@ current ALB but does not resolve the underlying TXT-ownership gap - the
 same failure will recur the next time the ALB is replaced, until "Fifth
 failure class" above is confirmed resolved (or superseded by a different
 fix).
+
+## Phase 4 (observability + production deployment path)
+
+### Loki CrashLoopBackOff: `singleBinary.persistence.enabled: false` does not fall back to an emptyDir
+
+**Problem.** Added `helm_release.loki` (chart `grafana/loki` 7.3.0) to
+`terraform/modules/addons/observability.tf`, following the same pattern
+already used for `helm_release.kube_prometheus_stack`'s Prometheus:
+disable persistence, assume the chart falls back to an emptyDir the way
+prometheus-operator does when `storageSpec` is left unset. `terraform
+apply` succeeded, but `helm_release.loki` itself failed with "context
+deadline exceeded" after the full 10m timeout, and `atomic = true`
+auto-uninstalled it - nothing was left in the cluster to inspect.
+
+**What I tried.** Reproduced manually and deliberately without the
+guardrails that had destroyed the evidence: `helm install loki
+grafana/loki --version 7.3.0 -n monitoring -f <the same values Terraform
+generated>`, no `--atomic`, no `--wait`, no `--timeout`, so a failing pod
+would stay up. `loki-0` came up `1/2 Running` then went straight to
+`CrashLoopBackOff`. `kubectl logs loki-0 -c loki --previous`:
+```
+mkdir /var/loki: read-only file system
+error initialising module: ruler-storage
+```
+Not Pending (scheduled fine), not OOMKilled (`exitCode: 1, reason:
+"Error"`, not 137), and no PVC was created (`persistence.enabled: false`
+worked as intended on that front) - so the sizing, scheduling, and
+WaitForFirstConsumer hypotheses were all ruled out before the actual cause
+was found: the `loki` container runs with `readOnlyRootFilesystem: true`
+(this chart's own hardened default), and its `volumeMounts` had nothing
+mounted at `/var/loki` at all. Confirmed against the pinned chart's own
+`templates/single-binary/statefulset.yaml`: the `storage`
+volume+volumeMount at `/var/loki` only exists at all
+`{{- if .Values.singleBinary.persistence.enabled }}`, as a PVC - there is
+no chart-side emptyDir fallback the way prometheus-operator has one.
+`ruler.enabled: true` is this chart's own default (never touched), and the
+ruler module's WAL directory (`rulerConfig.wal.dir`, default
+`/var/loki/ruler-wal`) tries to `mkdir` under `/var/loki` unconditionally
+on startup - with nothing mounted there and a read-only root filesystem,
+that `mkdir` fails and the process exits immediately.
+
+**What fixed it.** Added `singleBinary.extraVolumes: [{name: storage,
+emptyDir: {}}]` and `singleBinary.extraVolumeMounts: [{name: storage,
+mountPath: /var/loki}]` alongside `persistence.enabled: false` (still no
+PVC). Also added `ruler.enabled: false` (no alerting rules are configured
+and Alertmanager is already cut) - noted in the Terraform comment that
+this alone does not fix the crash, since the compactor and the
+index/chunk WAL also write under `/var/loki` regardless of the ruler.
+Verified with `helm template ... | grep -A5 /var/loki` before committing
+to the shape (a rendered `emptyDir`, not a PVC, mounted at `/var/loki`),
+then re-installed manually the same no-atomic/no-wait way: `loki-0` reached
+`2/2 Running` in 47s with zero restarts, `/ready` returned `200 ready`.
+
+Also changed `helm_release.loki`'s `atomic` to `false` (every other release
+in this module keeps `atomic = true`) - a failed install should stay up
+for `kubectl describe`/`logs` to actually diagnose it, not get
+auto-rolled-back before anyone can look, which is exactly what cost the
+first 10 minutes here.
+
+### Copy-paste bugs in `terraform/envs/production/` - never previously applied, caught before any apply
+
+`terraform/envs/production/` was scaffolded from `terraform/envs/staging/`
+and had two live bugs, found while wiring the CI/CD production deployment
+job:
+
+1. **`variables.tf`'s `environment` variable defaulted to `"staging"`**,
+   not `"production"`. `terraform.tfvars` (gitignored, not committed)
+   happens to override this correctly today - confirmed via `terraform
+   console` that `local.cluster_name` resolves to
+   `"eks-platform-production"` - but the *default* was a live landmine: a
+   fresh clone running `terraform plan` in this directory with no
+   `terraform.tfvars` present would have silently planned a second
+   `"eks-platform-staging"`-named environment instead of failing loudly,
+   colliding with the real one. Fixed the default to `"production"`, and
+   added `terraform.tfvars.example` to both `envs/staging` and
+   `envs/production` so a fresh clone has an explicit file to copy from
+   instead of relying on defaults being correct.
+
+2. **`main.tf`'s `access_entries.ci_deploy` block referenced the wrong
+   role and the wrong namespace** - `principal_arn =
+   data.terraform_remote_state.persistent.outputs.ci_deploy_role_arn`
+   (staging's CI role, trusted only for `sub:
+   repo:.../...:ref:refs/heads/main`) scoped to `namespaces = ["staging"]`,
+   inside what is supposed to be the *production* cluster. The role that
+   actually exists for production is `aws_iam_role.ci_production`
+   (`terraform/persistent/oidc.tf`, output `ci_production_role_arn`,
+   trusted only for `sub: repo:.../...:environment:production`). Fixed to
+   reference `ci_production_role_arn`, scoped to `namespaces =
+   ["production"]`, and renamed the map key (`ci_deploy` → `ci_production`)
+   and the local group variable (`ci_deploy_k8s_group` →
+   `ci_production_k8s_group`, value `"${var.project}-ci-production"`) to
+   match - production had never been applied, so renaming the `for_each`
+   map key here is not a destroy/recreate.
+
+**Not fixed, flagged instead - genuinely out of scope for this pass:**
+- `terraform/modules/addons` (`staging_namespace.tf`,
+  `ci_deploy_rbac.tf`) hardcodes the namespace name `"staging"` - it is
+  not parameterized by environment. `module.addons` in
+  `envs/production/main.tf` will therefore still try to create a
+  namespace literally named `"staging"` inside the production cluster, and
+  bind its supplementary RBAC Role there, not into a `"production"`
+  namespace - even after the access-entry fix above. The EKS access entry
+  now correctly grants `ci_production` edit access scoped to a
+  `"production"` namespace that nothing currently creates. This needs a
+  `namespace` variable added to `modules/addons` (and both env callers
+  updated) before `module.addons` can actually be applied against
+  production.
+- `module.rds` in `envs/production/main.tf` still carries the same
+  `deletion_protection = false`, `skip_final_snapshot = true`,
+  `backup_retention_period = 0` overrides as staging, commented "staging
+  only, nightly teardown" - but production is not torn down nightly. As
+  written, a production RDS instance would have zero backup retention and
+  no deletion protection. This is a real data-loss risk if ever applied
+  as-is, but changing production's durability posture wasn't part of this
+  pass and deserves an explicit decision, not a silent edit.
+- `aws_iam_role.ci_production` (`terraform/persistent/oidc.tf`) has "no
+  permission policy attached yet" (its own comment) - it can authenticate
+  via OIDC but cannot yet call `ecr:GetAuthorizationToken`,
+  `eks:DescribeCluster`, or anything else the production CI job needs.
+  `.github/workflows/deploy.yml`'s new `production` job is gated behind
+  `vars.PRODUCTION_ENABLED` (deliberately unset) specifically so it stays
+  dormant until this and the two points above are resolved.
