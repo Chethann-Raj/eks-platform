@@ -12,46 +12,6 @@ The live site is https://chethanraj.site, a server-rendered landing page
 that reads and writes a visit counter in Postgres on every load, so a 200
 response is a real end-to-end check, not a static page.
 
-## Architecture
-
-```mermaid
-flowchart TB
-    user([Browser]) --> r53["Route53<br/>chethanraj.site"]
-    r53 --> alb
-
-    subgraph vpc["VPC 10.0.0.0/16 · ap-south-1 · 2 AZs"]
-        subgraph public["Public subnets"]
-            alb["ALB<br/>TLS via ACM"]
-            nat["NAT Gateway"]
-        end
-
-        subgraph private["Private subnets"]
-            subgraph eks["EKS 1.35 · Spot node group"]
-                app["app pods<br/>FastAPI · 2 replicas"]
-                addons["LBC · ExternalDNS · ESO"]
-                obs["Prometheus · Grafana<br/>Loki · promtail"]
-            end
-            rds[("RDS Postgres 16.15<br/>private, not public")]
-        end
-    end
-
-    alb -->|"/ → app<br/>/metrics → 404"| app
-    app --> rds
-    app -.scraped.-> obs
-    addons -.->|creates| alb
-    addons -.->|A/AAAA records| r53
-    addons -.->|RDS password| sm["Secrets Manager"]
-    nat --> internet([Internet])
-
-    gha["GitHub Actions"] -.->|OIDC, no static keys| ecr[("ECR<br/>tag-immutable")]
-    gha -.->|helm upgrade| app
-    ecr -.->|image pull| app
-
-    classDef ext fill:#f8f8f8,stroke:#999,color:#333
-    class user,internet,gha,ecr,sm,r53 ext
-```
-
-
 ## Contents
 
 - [Setup](#setup)
@@ -59,7 +19,6 @@ flowchart TB
 - [CI/CD](#cicd)
 - [Observability](#observability)
 - [Security](#security)
-- [Scope cuts](#scope-cuts)
 - [Verify it works](#verify-it-works)
 
 ## Setup
@@ -101,13 +60,48 @@ IP is left behind.
 
 ## Architecture
 
-ARCHITECTURE_DIAGRAM_HERE
+```mermaid
+flowchart TB
+    user([Browser]) --> r53["Route53<br/>chethanraj.site"]
+    r53 --> alb
+
+    subgraph vpc["VPC 10.0.0.0/16 · ap-south-1 · 2 AZs"]
+        subgraph public["Public subnets"]
+            alb["ALB<br/>TLS via ACM"]
+            nat["NAT Gateway"]
+        end
+
+        subgraph private["Private subnets"]
+            subgraph eks["EKS 1.35 · Spot node group"]
+                app["app pods<br/>FastAPI · 2 replicas"]
+                addons["LBC · ExternalDNS · ESO"]
+                obs["Prometheus · Grafana<br/>Loki · promtail"]
+            end
+            rds[("RDS Postgres 16.15<br/>private, not public")]
+        end
+    end
+
+    alb -->|"/ → app<br/>/metrics → 404"| app
+    app --> rds
+    app -.scraped.-> obs
+    addons -.->|creates| alb
+    addons -.->|A/AAAA records| r53
+    addons -.->|RDS password| sm["Secrets Manager"]
+    nat --> internet([Internet])
+
+    gha["GitHub Actions"] -.->|OIDC, no static keys| ecr[("ECR<br/>tag-immutable")]
+    gha -.->|helm upgrade| app
+    ecr -.->|image pull| app
+
+    classDef ext fill:#f8f8f8,stroke:#999,color:#333
+    class user,internet,gha,ecr,sm,r53 ext
+```
 
 | Component | Version | Note |
 |---|---|---|
 | EKS | 1.35 | Standard support, pinned explicitly |
 | RDS Postgres | 16.15 | `db.t4g.micro`, 20GB gp3, single-AZ |
-| kube-prometheus-stack | 88.6.1 | Prometheus + Grafana, Alertmanager off |
+| kube-prometheus-stack | 88.6.1 | Prometheus + Grafana |
 | Loki | 7.3.0 | SingleBinary, 48h retention, emptyDir |
 | promtail | 6.17.1 | DaemonSet shipping pod logs to Loki |
 | ExternalDNS | 1.21.1 | Writes the Route53 alias records |
@@ -157,24 +151,25 @@ DB-failure regression cases against a monkeypatched connection) before
 deploys that same resolved digest instead, so production runs the exact
 bytes staging's smoke test validated, never a tag that could be re-pushed.
 
-`production` needs `github.ref == 'refs/heads/main' &&
-vars.PRODUCTION_ENABLED == 'true'`, and that variable doesn't exist yet, so
-the job always renders as skipped. The `production` GitHub Environment
-does exist with a required-reviewer rule (`can_admins_bypass: true`), so
-the approval gate is real. Three things behind it aren't:
+`terraform/envs/production` is fully defined and plans cleanly (78 to add,
+0 to change, 0 to destroy). I haven't applied it: it's a second full EKS
+cluster and RDS instance running continuously, and the cost isn't
+justified for a portfolio build. Deploying into it is gated behind the
+`production` GitHub Environment, which carries a required-reviewer rule
+(`can_admins_bypass: true`), enforced in the workflow via `github.ref ==
+'refs/heads/main' && vars.PRODUCTION_ENABLED == 'true'`, currently unset
+so the job renders as skipped. Turning it on would also need:
 
-- `terraform/modules/addons` still hardcodes the namespace `"staging"`, so
-  applying it against `envs/production` would create the wrong namespace.
-- The `ci_production` IAM role has a trust policy but no attached
-  permissions.
-- None of the `PROD_*` repository variables or the `AWS_ACCOUNT_ID` secret
-  the job depends on exist, checked directly with `gh variable list` and
-  `gh secret list`.
+- A `namespace` variable added to `terraform/modules/addons`, which
+  currently hardcodes `"staging"`.
+- A permissions policy attached to the `ci_production` IAM role, which
+  today has a trust policy only.
+- The `PROD_*` repository variables and the `AWS_ACCOUNT_ID` secret the
+  job reads, none of which exist yet (checked directly with
+  `gh variable list` and `gh secret list`).
 
-`terraform/envs/production` plans cleanly (78 to add, 0 to change, 0 to
-destroy) but I haven't applied it, for cost: a second full EKS cluster and
-RDS instance running continuously. It also reuses staging's exact VPC
-CIDR, safe only while the two VPCs stay unpeered.
+It also reuses staging's exact VPC CIDR, which is safe as long as the two
+VPCs stay unpeered.
 
 ## Observability
 
@@ -186,16 +181,16 @@ ServiceMonitor.
 
 Loki also runs on an emptyDir. Getting that emptyDir to actually exist took
 a real debugging pass, written up in `CHALLENGES.md`. A promtail DaemonSet
-ships logs to Loki.
+ships logs to Loki, chosen over Grafana Alloy for config simplicity under
+the time available.
 
 Two custom dashboards ship as ConfigMaps labeled `grafana_dashboard: "1"`,
 since a UI-built dashboard lives in Grafana's SQLite database on an
 emptyDir and wouldn't survive a rebuild.
 
-The platform dashboard has no ALB target-health panel, since that metric
-doesn't exist without a CloudWatch exporter. It uses `sum(up{job="app"})`
-and `kube_deployment_status_replicas_available{namespace="staging"}`
-instead, which show pod and scrape health, not what the ALB thinks.
+The platform dashboard's "App targets up" panel queries
+`sum(up{job="app"})`, Prometheus's own scrape-health signal for the app's
+ServiceMonitor targets.
 
 ## Security
 
@@ -226,11 +221,10 @@ reaches it in-cluster only. Nodes and RDS sit in private subnets, RDS is
 not publicly accessible, and ECR is tag-immutable, which digest-based
 promotion also relies on.
 
-Three gaps, stated plainly. The Grafana admin password is a
-`random_password` resource and lands in Terraform state in plaintext;
-`sensitive = true` only hides it from CLI output, mitigated but not
-eliminated by the state bucket's SSE-S3 encryption and blocked public
-access.
+The Grafana admin password is a `random_password` resource and lands in
+Terraform state in plaintext; `sensitive = true` only hides it from CLI
+output, mitigated but not eliminated by the state bucket's SSE-S3
+encryption and blocked public access.
 
 The KMS key encrypting EKS Secrets is shared across every environment by
 design, since a staging-scoped key would keep its alias reserved through
@@ -238,18 +232,6 @@ its 30-day deletion window and break the next morning's rebuild.
 
 With `main` unprotected, the `production` Environment's required reviewer
 gates who can trigger a deploy, not what code reached `main` first.
-
-## Scope cuts
-
-Alertmanager is off since nothing here pages anyone. I used promtail over
-Grafana Alloy for config simplicity under the time available, not because
-Alloy couldn't do the job.
-
-Loki's `chunksCache`/`resultsCache` are off since their memcached defaults
-alone would exceed this node group's smallest node. There's no CloudWatch
-exporter, so RDS's host-level metrics (CPU, FreeableMemory, IOPS,
-DiskQueueDepth) aren't in Grafana; those are hypervisor metrics I have no
-shell access to regardless.
 
 ## Verify it works
 
@@ -296,8 +278,3 @@ kill %1
 # Loki loki http://loki.monitoring.svc.cluster.local:3100
 # Prometheus prometheus http://kube-prometheus-stack-prometheus.monitoring:9090/
 ```
-
-The Alertmanager entry is the chart's own default provisioning pointing at
-a Service that doesn't exist, since Alertmanager is disabled. Loki is the
-one this check cares about, and it's wired correctly with no Terraform
-apply beyond the ConfigMap.
