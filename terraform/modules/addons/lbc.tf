@@ -3,11 +3,12 @@
 # https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v3.5.0/docs/install/iam_policy.json
 # (v3.5.0 matching helm_release.aws_load_balancer_controller's pinned
 # version below), not hand-transcribed. Several of its 16 statements use
-# "Resource": "*" - that's AWS's own document, not a choice made here. Per
-# CLAUDE.md §2: the controller's read-only Describe*/Get*/List* calls
-# against EC2 and ELBv2 (discovering existing subnets, SGs, ENIs, listeners,
-# etc. account-wide) have no resource-level permission support in IAM at
-# all, and its write actions (CreateLoadBalancer, CreateTargetGroup, ...)
+# "Resource": "*" - that's AWS's own document, not a choice made here. A
+# wildcard is genuinely unavoidable here: the controller's read-only
+# Describe*/Get*/List* calls against EC2 and ELBv2 (discovering existing
+# subnets, SGs, ENIs, listeners, etc. account-wide) have no resource-level
+# permission support in IAM at all, and its write actions
+# (CreateLoadBalancer, CreateTargetGroup, ...)
 # can't be scoped to specific ARNs upfront because the controller creates
 # those ALBs/target groups itself, dynamically, in response to Ingress/
 # Service objects that don't exist yet at policy-authoring time. AWS scopes
@@ -117,7 +118,7 @@ resource "helm_release" "aws_load_balancer_controller" {
       # every new type: LoadBalancer Service cluster-wide, so LBC becomes
       # the default provisioner for those and creates an NLB. This
       # platform routes everything through Ingress/ALB, never a
-      # LoadBalancer-type Service (CLAUDE.md §7) - the webhook does nothing
+      # LoadBalancer-type Service - the webhook does nothing
       # useful here while sitting in front of every Service creation in
       # the cluster with failurePolicy: Fail. On a from-scratch nightly
       # rebuild, that is a live failure mode for any other chart creating

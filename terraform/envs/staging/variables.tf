@@ -17,7 +17,7 @@ variable "project" {
 }
 
 variable "environment" {
-  description = "Environment tag / naming prefix component. This is the nightly-teardown environment - see CLAUDE.md §6."
+  description = "Environment tag / naming prefix component. This is the nightly-teardown environment, destroyed and rebuilt on a schedule to control cost."
   type        = string
   default     = "staging"
 }

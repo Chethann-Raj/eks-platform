@@ -35,9 +35,9 @@ resource "aws_iam_role" "external_dns" {
 # support resource-level permissions for both. Only ListHostedZones is
 # genuinely unscopable: it enumerates every hosted zone in the account, and
 # Route53 has no resource-level permission support for that action at all.
-# So "*" is used for ListHostedZones only, per CLAUDE.md §2 - not for
-# ListResourceRecordSets, which stays scoped to this one zone instead of
-# defaulting to "*" for convenience.
+# So "*" is used for ListHostedZones only, since that's genuinely
+# unavoidable - not for ListResourceRecordSets, which stays scoped to this
+# one zone instead of defaulting to "*" for convenience.
 data "aws_iam_policy_document" "external_dns" {
   statement {
     sid    = "ChangeAndListThisZoneOnly"

@@ -1,6 +1,6 @@
 # kube-prometheus-stack: Prometheus + Grafana. Alertmanager is a deliberate
-# scope cut - CLAUDE.md §15. Loki (below, helm_release.loki) is not cut -
-# centralized logging is a required part of the assignment.
+# scope cut - nothing here pages anyone. Loki (below, helm_release.loki) is
+# not cut - centralized logging is a required part of the assignment.
 resource "kubernetes_namespace_v1" "monitoring" {
   metadata {
     name = "monitoring"
@@ -52,9 +52,10 @@ resource "kubernetes_secret_v1" "grafana_admin" {
 # 2026-08-31 - 88.6.1 was the newest entry, appVersion v0.93.1 (the bundled
 # prometheus-operator's version, not Prometheus itself).
 #
-# Sizing below is fixed by explicit instruction, not derived from
-# CLAUDE.md §13 - this cluster's node group is mixed-instance (one
-# m7i-flex.large at 6.94Gi allocatable, two c7i-flex.large at 3.07Gi) and
+# Sizing below is fixed by explicit instruction, not derived from generic
+# observability-sizing guidance - this cluster's node group is
+# mixed-instance (one m7i-flex.large at 6.94Gi allocatable, two
+# c7i-flex.large at 3.07Gi) and
 # torn down nightly, so every component's requests/limits are set low
 # enough to schedule on the smallest node, with no nodeSelector/affinity
 # pinning anything to a specific node or instance type.
@@ -77,7 +78,7 @@ resource "helm_release" "kube_prometheus_stack" {
   timeout = 600
 
   set = [
-    # Loki and Alertmanager are OUT - deliberate scope cut (CLAUDE.md §15).
+    # Alertmanager is OUT - deliberate scope cut, nothing here pages anyone.
     {
       name  = "alertmanager.enabled"
       value = "false"
@@ -108,7 +109,7 @@ resource "helm_release" "kube_prometheus_stack" {
     },
     # No cpu limit - CFS throttling during a scrape cycle causes scrape
     # timeouts and gaps in the graphs, indistinguishable from a real
-    # outage. A short CPU burst is the cheaper failure (CLAUDE.md §13).
+    # outage. A short CPU burst is the cheaper failure.
     {
       name  = "prometheus.prometheusSpec.resources.limits.memory"
       value = "1536Mi"
@@ -126,13 +127,23 @@ resource "helm_release" "kube_prometheus_stack" {
       name  = "grafana.resources.requests.cpu"
       value = "100m"
     },
+    # Measured steady state is 386Mi across the pod with 30 dashboards
+    # provisioned (28 bundled + 2 custom) and both the datasource and
+    # dashboard sidecars running - against the previous 256Mi limit, that's
+    # already over ceiling and is what OOMKilled the grafana container
+    # (confirmed via `kubectl describe pod`: grafana container specifically,
+    # Reason: OOMKilled, Exit Code: 137, sidecars unaffected). Grafana's
+    # working set spikes above steady state when a dashboard with several
+    # panels is opened or Explore runs a range query, so a limit sitting at
+    # steady state has no room for that spike regardless. 768Mi on this
+    # node's 3140Mi allocatable still leaves room alongside Prometheus.
     {
       name  = "grafana.resources.requests.memory"
-      value = "128Mi"
+      value = "384Mi"
     },
     {
       name  = "grafana.resources.limits.memory"
-      value = "256Mi"
+      value = "768Mi"
     },
     # No Ingress resource for Grafana - left unset, matching the chart's
     # own default (ingress.enabled: false, service left at ClusterIP).

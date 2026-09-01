@@ -24,7 +24,7 @@ variable "private_subnet_ids" {
 }
 
 variable "kubernetes_version" {
-  description = "EKS version. Pinned per CLAUDE.md §4 - do not use 1.31, it left standard support."
+  description = "EKS version, pinned explicitly - do not use 1.31, it left standard support."
   type        = string
   default     = "1.35"
 }
@@ -61,7 +61,7 @@ variable "node_ami_type" {
 }
 
 variable "node_capacity_type" {
-  description = "SPOT or ON_DEMAND. SPOT per CLAUDE.md §5 - the binding quota is 32 vCPU Spot, not 16 vCPU On-Demand."
+  description = "SPOT or ON_DEMAND. SPOT by default - the binding quota in this account is 32 vCPU Spot, not 16 vCPU On-Demand."
   type        = string
   default     = "SPOT"
 }
@@ -83,7 +83,7 @@ variable "node_max_size" {
   default     = 6
 }
 
-# Addon versions are pinned explicitly (CLAUDE.md §2: no floating "latest").
+# Addon versions are pinned explicitly - no floating "latest".
 # These defaults are the versions AWS currently marks as default/recommended
 # for Kubernetes 1.35 as of 2026-08-30, read directly via:
 #   aws eks describe-addon-versions --addon-name <name> --kubernetes-version 1.35

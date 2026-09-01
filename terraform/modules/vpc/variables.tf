@@ -21,7 +21,7 @@ variable "public_subnet_cidrs" {
 
   validation {
     condition     = length(var.public_subnet_cidrs) == 2
-    error_message = "Exactly 2 public subnet CIDRs are required - this module is built for the 2-AZ layout in CLAUDE.md §7."
+    error_message = "Exactly 2 public subnet CIDRs are required - this module is built for a fixed 2-AZ layout."
   }
 }
 
@@ -32,7 +32,7 @@ variable "private_subnet_cidrs" {
 
   validation {
     condition     = length(var.private_subnet_cidrs) == 2
-    error_message = "Exactly 2 private subnet CIDRs are required - this module is built for the 2-AZ layout in CLAUDE.md §7."
+    error_message = "Exactly 2 private subnet CIDRs are required - this module is built for a fixed 2-AZ layout."
   }
 }
 

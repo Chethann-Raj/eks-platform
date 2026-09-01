@@ -71,8 +71,8 @@ resource "aws_subnet" "private" {
 
 # Single NAT Gateway shared across both AZs - deliberate cost trade-off
 # (~$32/mo saved vs. one per AZ) at the cost of an AZ-level SPOF for egress
-# from private subnets. See CLAUDE.md §7 and the root README for the
-# reasoning. Placed in the first (deterministically-sorted) public subnet.
+# from private subnets. See the root README for the reasoning. Placed in
+# the first (deterministically-sorted) public subnet.
 resource "aws_eip" "nat" {
   domain = "vpc"
 

@@ -271,7 +271,7 @@ jobs:
         uses: actions/checkout@v7.0.1
 
       # secrets.AWS_ACCOUNT_ID, not a literal account ID - this repo is
-      # public (CLAUDE.md §2/org policy: never commit the account ID).
+      # public and the account ID must never be committed to it.
       # eks-platform-ci-production is the role
       # terraform/persistent/oidc.tf's aws_iam_role.ci_production actually
       # creates - there is no repository variable holding this ARN the way

@@ -91,7 +91,7 @@ resource "aws_eks_cluster" "this" {
     # from Actions. The security boundary is IAM + EKS Access Entries + RBAC
     # (see access_entries.tf), not the network ACL. Control plane audit
     # logging (enabled_cluster_log_types below) makes access attributable.
-    # See CLAUDE.md §7 and the root README for the full reasoning.
+    # See the root README for the full reasoning.
     public_access_cidrs = ["0.0.0.0/0"]
   }
 
@@ -106,7 +106,7 @@ resource "aws_eks_cluster" "this" {
 
   upgrade_policy {
     # Explicit so the cluster can never silently drift into paid extended
-    # support - see CLAUDE.md §4.
+    # support.
     support_type = "STANDARD"
   }
 

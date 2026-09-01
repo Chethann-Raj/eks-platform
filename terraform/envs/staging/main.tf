@@ -15,8 +15,8 @@ locals {
   ci_deploy_k8s_group = "${var.project}-ci-deploy"
 }
 
-# Never write the account ID literally - CLAUDE.md §2. Used below for the
-# terraform-admin access entry.
+# Never write the account ID literally, since this repo is public. Used
+# below for the terraform-admin access entry.
 data "aws_caller_identity" "current" {}
 
 # Persistent layer's remote state, read-only. terraform/persistent/backend.tf
@@ -64,8 +64,8 @@ module "eks" {
   # README for why this key must never live in a nightly-destroyed layer.
   kms_key_arn = data.terraform_remote_state.persistent.outputs.eks_kms_key_arn
 
-  # CLAUDE.md §8: both access entries required, or Phase 3's first
-  # `helm upgrade` fails with an authentication error.
+  # Both access entries are required, or the first `helm upgrade` from CI
+  # fails with an authentication error.
   #
   # access_policy is a bare EKS access policy NAME, not an ARN - the eks
   # module builds the arn:aws:eks::aws:cluster-access-policy/... ARN

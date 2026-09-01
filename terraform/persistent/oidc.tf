@@ -94,7 +94,7 @@ data "aws_iam_policy_document" "ci_deploy_permissions" {
     effect = "Allow"
     # ecr:GetAuthorizationToken returns a short-lived Docker login token,
     # not access to any specific repository - AWS does not support
-    # resource-level permissions for this action (CLAUDE.md §2).
+    # resource-level permissions for this action, so "*" is unavoidable.
     actions   = ["ecr:GetAuthorizationToken"]
     resources = ["*"]
   }

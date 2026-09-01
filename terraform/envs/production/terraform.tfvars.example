@@ -1,6 +1,6 @@
 # Copy to terraform.tfvars and adjust if needed. terraform.tfvars itself is
-# gitignored (CLAUDE.md §9), so a fresh clone has nothing to plan against
-# without this file to copy from.
+# gitignored, so a fresh clone has nothing to plan against without this
+# file to copy from.
 #
 # environment MUST be "production" here. variables.tf's own default for it
 # was "staging" until this pass (copied from envs/staging/variables.tf and
@@ -10,9 +10,9 @@
 # colliding with the real one. The default is fixed now too, but this file
 # exists to make it explicit regardless.
 #
-# instance_class is a placeholder matching staging's - CLAUDE.md doesn't
-# specify production RDS sizing, so this hasn't been deliberately chosen for
-# production load and should be reviewed before this environment goes live.
+# instance_class is a placeholder matching staging's - production RDS
+# sizing hasn't been deliberately chosen for production load and should be
+# reviewed before this environment goes live.
 
 aws_region         = "ap-south-1"
 aws_profile        = "pro"
