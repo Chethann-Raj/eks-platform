@@ -2,7 +2,7 @@
 
 Reusable networking module: 2 AZs, public + private subnets, a single shared
 NAT Gateway, EKS subnet discovery tags, and VPC Flow Logs to CloudWatch.
-Per `CLAUDE.md` §7.
+Two AZs, one shared NAT Gateway rather than one per AZ.
 
 ## Why this has no backend, no provider block, and can't `plan` standalone
 
@@ -50,4 +50,4 @@ constrains what the root's `required_providers` resolves to when composed.
   `kubernetes.io/cluster/<name> = shared` once the cluster name exists,
   without this module needing to know about EKS at all.
 - VPC Flow Logs go to CloudWatch Logs with a 3-day retention default
-  (`flow_log_retention_days`), not S3 - matches CLAUDE.md §7.
+  (`flow_log_retention_days`), not S3.

@@ -14,8 +14,10 @@ Consequences:
 
 - `terraform.tfstate` for this module lives on disk under this directory. It
   is gitignored (see repo root `.gitignore`) and must never be committed —
-  even though it holds no secrets here (just an S3 bucket ID/ARN), state
-  files as a class are excluded repo-wide per `CLAUDE.md` §9.
+  even though it holds no secrets here (just an S3 bucket ID/ARN),
+  `.tfvars` and `.tfstate` files are excluded repo-wide as a class, since
+  this repo is public and either can carry credentials or account
+  identifiers.
 - Re-running `terraform apply` in this directory is safe and idempotent:
   if the bucket already exists in AWS but the local state file was lost
   (new machine, wiped `.terraform`), re-bootstrapping will fail on
@@ -38,7 +40,7 @@ cd terraform/bootstrap
 terraform init
 terraform providers lock -platform=darwin_arm64 -platform=linux_amd64
 terraform plan
-terraform apply   # run by the human, not by Claude
+terraform apply   # run manually
 ```
 
 Then wire the output `state_bucket_name` into the `backend "s3"` block of

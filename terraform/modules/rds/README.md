@@ -2,7 +2,8 @@
 
 Reusable RDS PostgreSQL module: subnet group, a locked-down security group,
 a parameter group tuned for observability, and the instance itself with
-RDS-managed credentials. Per `CLAUDE.md` §4, §9.
+RDS-managed credentials - Postgres 16 on `db.t4g.micro`/20GB gp3,
+password never touching Terraform state or outputs.
 
 ## Why this can't `plan` standalone
 
@@ -31,8 +32,9 @@ rather than a second hardcoded variable, so the two can't drift apart if
 
 ## Why `db.t4g.micro`
 
-Matches `CLAUDE.md` §4/§5's sizing: this is a portfolio-scale workload (a
-handful of tables, low write volume) sharing a 3-node/5.7 vCPU cluster.
+Sized for a portfolio-scale workload (a handful of tables, low write
+volume) sharing a 3-node/5.7 vCPU cluster, not for real production
+throughput.
 `t4g.micro` is Graviton (cheaper per vCPU than `t3`), burstable, and free-tier
 eligible - there's no throughput requirement here that would justify a
 bigger, non-burstable class.
@@ -42,8 +44,8 @@ bigger, non-burstable class.
 `aws_db_subnet_group.this` only ever gets `var.private_subnet_ids`, and
 `publicly_accessible = false` is hardcoded, not a variable - there's no
 scenario in this project where the database should be reachable from
-outside the VPC. Per `CLAUDE.md` §7: private subnets are for nodes and RDS,
-full stop.
+outside the VPC. Private subnets are for nodes and RDS, full stop; the
+ALB and NAT Gateway are the only things that belong in public subnets.
 
 ## Security group: "5432 from nodes" is an approximation
 

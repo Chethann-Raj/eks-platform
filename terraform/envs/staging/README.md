@@ -1,7 +1,7 @@
 # terraform/envs/staging
 
 Wires `vpc` + `eks` + `rds` together for the environment that's destroyed and
-rebuilt nightly (`CLAUDE.md` §6). This is the only layer with its own
+rebuilt nightly. This is the only layer with its own
 `provider "aws" {}` block - every module under `terraform/modules/` inherits
 it.
 
@@ -21,15 +21,16 @@ Nothing from the persistent layer (hosted zone, ACM cert, ECR) is
 duplicated here - Phase 2 wires those into the addons/app layer when it's
 needed.
 
-## EKS access entries (CLAUDE.md §8)
+## EKS access entries
 
 Two, both required or Phase 3's first `helm upgrade` fails with an
 authentication error:
 
 1. `data.aws_caller_identity.current.arn` (the identity running `terraform
    apply` - `terraform-admin` under the `pro` profile) →
-   `AmazonEKSClusterAdminPolicy`, cluster-scoped. Never a literal ARN -
-   CLAUDE.md §2.
+   `AmazonEKSClusterAdminPolicy`, cluster-scoped. Never a literal ARN,
+   since a hardcoded account ID or role ARN breaks the moment this runs
+   under a different AWS account or profile.
 2. `ci_deploy_role_arn` from the persistent layer →
    `AmazonEKSEditPolicy`, scoped to the `staging` namespace only.
 

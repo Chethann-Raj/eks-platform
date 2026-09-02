@@ -14,3 +14,7 @@ __pycache__/
 .venv/
 .env
 *.tfplan
+docs/engineering-log.md
+CLAUDE.md
+HANDOFF.md
+.claude/

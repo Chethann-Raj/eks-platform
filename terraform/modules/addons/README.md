@@ -2,7 +2,7 @@
 
 Platform addons layered onto the already-running cluster: default gp3
 storage, AWS Load Balancer Controller, ExternalDNS, and External Secrets
-Operator. Per `CLAUDE.md` §7 (ALB path), §9 (secrets).
+Operator (secret ARNs listed explicitly below, never wildcarded).
 
 ## Why this module needs providers the eks module doesn't
 
@@ -60,10 +60,10 @@ IRSA role trusts the eks module's existing OIDC provider
 created. Its IAM policy (`lbc_iam_policy.json`) is AWS's own published
 policy for this exact chart version, downloaded verbatim rather than
 hand-transcribed - see the comment in `lbc.tf` for the source URL and why
-several of its statements are unavoidably `Resource: "*"` (per
-`CLAUDE.md` §2: many of its read-only EC2/ELBv2 calls have no
-resource-level IAM support at all, and its write actions can't be scoped to
-ARNs that don't exist until the controller creates them).
+several of its statements are unavoidably `Resource: "*"` - many of its
+read-only EC2/ELBv2 calls have no resource-level IAM support at all, and
+its write actions can't be scoped to ARNs that don't exist until the
+controller creates them.
 
 Chart version `3.5.0`, confirmed live against
 `https://aws.github.io/eks-charts/index.yaml` (newest entry, matching
@@ -195,11 +195,11 @@ change) - once credentials come from a re-read file instead, there's
 nothing for a rolling restart to accomplish that the file refresh doesn't
 already handle.
 
-## `depends_on` and CLAUDE.md §10 (teardown ordering)
+## `depends_on` and teardown ordering
 
 Every `helm_release` in this module needs to not be destroyed after the EKS
 API server becomes unreachable, or `terraform destroy` hits a 10-minute
-timeout per release (`CLAUDE.md` §10). This module can't express
+timeout per release. This module can't express
 "depends on `module.eks.aws_eks_node_group.default`" directly - that
 resource lives in a sibling module, and cross-module resource references
 aren't a thing `depends_on` can express from inside a child module.

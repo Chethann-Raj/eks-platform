@@ -1,7 +1,9 @@
 # terraform/persistent
 
 Built once, read by `terraform/envs/staging/` via `terraform_remote_state`,
-never destroyed by the nightly teardown. See `CLAUDE.md` §6.
+never destroyed by the nightly teardown - this is where anything whose
+identity must survive a rebuild (hosted zone, ACM cert, ECR repo, OIDC
+provider) lives.
 
 ## Namecheap delegation (required before the ACM cert can validate)
 

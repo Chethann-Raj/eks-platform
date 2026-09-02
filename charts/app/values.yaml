@@ -46,8 +46,8 @@ autoscaling:
 
 podDisruptionBudget:
   # maxUnavailable, never minAvailable: 1 against a baseline of 2 replicas -
-  # CLAUDE.md §12. minAvailable: 1 here would block node drain indefinitely
-  # the moment the HPA ever scales back down to 2.
+  # minAvailable: 1 here would block node drain indefinitely the moment
+  # the HPA ever scales back down to 2.
   maxUnavailable: 1
 
 ingress:

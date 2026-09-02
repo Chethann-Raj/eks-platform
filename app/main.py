@@ -61,8 +61,8 @@ def _startup() -> None:
 
 @app.get("/healthz")
 def healthz() -> dict:
-    # Liveness: process only, no DB check - CLAUDE.md §11. A DB blip
-    # should stop traffic (readyz), not restart a pod that's otherwise fine.
+    # Liveness: process only, no DB check. A DB blip should stop traffic
+    # (readyz), not restart a pod that's otherwise fine.
     return {"status": "ok"}
 
 

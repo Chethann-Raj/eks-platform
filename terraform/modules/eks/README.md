@@ -1,7 +1,8 @@
 # terraform/modules/eks
 
 Reusable EKS module: cluster, managed nodegroup, OIDC/IRSA, core addons and
-variable-driven Access Entries. Per `CLAUDE.md` §4, §5, §8.
+variable-driven Access Entries (the EKS Access Entries API only - the
+`aws-auth` ConfigMap path is deprecated and unused here).
 
 ## Why this can't `plan` standalone
 
