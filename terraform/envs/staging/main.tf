@@ -142,5 +142,13 @@ module "addons" {
   # targets from inside a child module). Depending on the whole module.eks
   # call is a strictly stronger guarantee that includes the nodegroup, and
   # is symmetric on destroy too - see terraform/modules/addons/README.md.
-  depends_on = [module.eks]
+  #
+  # module.vpc is included for the same reason, on destroy specifically:
+  # the vpc_id input above only creates an implicit dependency on
+  # aws_vpc.this, not on the NAT gateway/EIP/IGW/route tables/flow logs -
+  # those have no reference from this module at all, so without this they
+  # destroy immediately and independently of whether helm uninstalls here
+  # are still running. Depending on the whole module.vpc call forces every
+  # VPC resource to wait until every addon here has finished uninstalling.
+  depends_on = [module.eks, module.vpc]
 }
