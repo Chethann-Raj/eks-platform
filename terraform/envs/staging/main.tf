@@ -82,10 +82,11 @@ module "eks" {
       access_policy     = "AmazonEKSEditPolicy"
       access_scope_type = "namespace"
       namespaces        = ["staging"]
-      # AmazonEKSEditPolicy does not cover external-secrets.io (confirmed
-      # against AWS's own published permission table for this policy -
-      # see CHALLENGES.md). This group is what modules/addons'
-      # ci_deploy_rbac.tf binds its supplementary Role to.
+      # AmazonEKSEditPolicy's built-in rules don't cover the
+      # external-secrets.io API group, so this role can't manage
+      # ExternalSecrets on its own. This group is what modules/addons'
+      # ci_deploy_rbac.tf binds its supplementary Role (with explicit
+      # external-secrets.io rules) to.
       kubernetes_groups = [local.ci_deploy_k8s_group]
     }
   }

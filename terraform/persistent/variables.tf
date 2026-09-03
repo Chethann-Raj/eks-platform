@@ -42,9 +42,9 @@ variable "github_repo" {
 
 # GitHub's immutable subject claims: repos created after 2026-07-15
 # automatically get a second, ID-based sub claim format alongside the
-# legacy name-based one (see CHALLENGES.md, "fourth failure class"). Both
-# IDs are numeric and permanent for the life of the account/repo - produced
-# by:
+# legacy name-based one, and oidc.tf's trust policies accept both prefixes
+# until it's confirmed which one GitHub actually sends. Both IDs are
+# numeric and permanent for the life of the account/repo - produced by:
 #   gh api users/Chethann-Raj --jq '.id'
 #   gh api repos/Chethann-Raj/eks-platform --jq '.id'
 # Not bare literals in oidc.tf so their provenance (and the commands to

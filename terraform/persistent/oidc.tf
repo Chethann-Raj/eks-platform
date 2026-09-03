@@ -10,13 +10,12 @@ locals {
   # "staging") - if that ever changes, update this too.
   staging_cluster_arn = "arn:aws:eks:${var.aws_region}:${data.aws_caller_identity.current.account_id}:cluster/${var.project}-staging"
 
-  # Two `sub` claim prefixes for the same repo - see CHALLENGES.md's
-  # "fourth failure class" entry. This repo was created 2026-08-30, after
-  # GitHub's 2026-07-15 cutover for automatic immutable subject claims, so
-  # GitHub may issue either the legacy name-based prefix or the new
-  # ID-based one; every trust policy below accepts both until CloudTrail
-  # confirms which one is actually sent, at which point this should be
-  # narrowed back to a single value.
+  # Two `sub` claim prefixes for the same repo, both accepted below. This
+  # repo was created 2026-08-30, after GitHub's 2026-07-15 cutover for
+  # automatic immutable subject claims, so GitHub may issue either the
+  # legacy name-based prefix or the new ID-based one; every trust policy
+  # below accepts both until CloudTrail confirms which one is actually
+  # sent, at which point this should be narrowed back to a single value.
   github_sub_legacy_prefix    = "repo:${var.github_org}/${var.github_repo}"
   github_sub_immutable_prefix = "repo:${var.github_org}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}"
 }

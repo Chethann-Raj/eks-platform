@@ -26,8 +26,8 @@ variable "environment" {
   # a fresh clone running `terraform plan` in this directory with no
   # terraform.tfvars present (it's gitignored) would have
   # silently planned a second "eks-platform-staging"-named environment
-  # instead of failing loudly, colliding with the real one. See
-  # terraform.tfvars.example in this directory and CHALLENGES.md.
+  # instead of failing loudly, colliding with the real one. Fixed to
+  # "production" here; see terraform.tfvars.example in this directory.
   default = "production"
 }
 

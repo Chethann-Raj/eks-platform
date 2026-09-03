@@ -69,12 +69,12 @@ cluster-aware tooling find these subnets by cluster, in addition to the
 
 `phase3.tfplan` shows `aws_iam_role.external_dns`/`external_secrets`/`lbc`
 (and their `aws_iam_role_policy` documents) as "updated in-place" even
-though nothing about their actual trust or permission content changed -
-see CHALLENGES.md for why (`module.addons`'s module-level `depends_on
-[module.eks]` defers several data sources to apply-time whenever anything
-in `module.eks` changes, which makes Terraform show their dependents as
-"known after apply" without there being a real diff). To confirm that
-after applying, diff the actual IAM trust policy before and after:
+though nothing about their actual trust or permission content changed:
+`module.addons`'s module-level `depends_on [module.eks]` defers several
+data sources to apply-time whenever anything in `module.eks` changes,
+which makes Terraform show their dependents as "known after apply"
+without there being a real diff. To confirm that after applying, diff the
+actual IAM trust policy before and after:
 
 ```bash
 # Before apply, for each of the three IRSA roles (note the LBC role's real

@@ -45,13 +45,13 @@ def _startup() -> None:
     # response - which is indistinguishable from a hung server and, unlike
     # a clean 503, actively misleads whoever's debugging it.
     #
-    # This DB call is exactly as likely to transiently fail here as the one
-    # in readyz() below (RDS not reachable yet, or the mounted credential
-    # files not fully populated yet during an ExternalSecret sync race -
-    # both observed for real: see CHALLENGES.md). readyz() already handles
-    # that failure correctly (503, not a crash) - so schema setup is
-    # retried there too on every call, and self-heals the moment the DB
-    # actually becomes reachable, with no pod restart needed.
+    # This DB call can transiently fail here for two reasons: RDS not yet
+    # reachable, or the mounted DB credential files not yet populated
+    # because ExternalSecret's sync to the mounted Secret races pod
+    # startup. Both are transient and both resolve within seconds, so
+    # rather than treat either as fatal, schema setup is retried on every
+    # /readyz call too (below) and self-heals once the dependency is
+    # actually ready, with no pod restart needed.
     try:
         with db.get_connection() as conn:
             _ensure_schema(conn)
