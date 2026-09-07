@@ -58,6 +58,14 @@ AWS resources first. `scripts/survivor-sweep.sh` checks afterward that no
 cluster, RDS instance, NAT gateway, load balancer, EBS volume, or Elastic
 IP is left behind.
 
+Measured rebuild timings (`envs/staging`, from a clean state): `terraform
+apply` for the full infra (VPC, EKS, RDS, node group, every addon) takes
+**16m04s**. The app itself isn't a Terraform resource - it deploys via
+`.github/workflows/deploy.yml` on push to `main` - and that CI pipeline
+(test + build + push + `helm upgrade` + smoke test) adds a further
+**3m57s** on top. A full restore from a torn-down environment is therefore
+the infra apply plus a pipeline run, not the apply alone.
+
 ## Architecture
 
 ```mermaid

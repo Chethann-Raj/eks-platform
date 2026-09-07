@@ -1,0 +1,17 @@
+.git
+__pycache__/
+*.pyc
+.venv/
+
+# Not needed in the image, and multi-hundred-MB with cached provider
+# binaries - excluding these keeps the build context small and fast.
+terraform/
+charts/
+monitoring/
+
+# May contain private engineering notes (gitignored, not meant to leave
+# this machine) - must never end up inside a pushed image layer.
+docs/
+.claude/
+
+*.pdf

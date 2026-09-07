@@ -104,25 +104,19 @@ def test_stats_returns_message_and_int_visits(monkeypatch):
     assert isinstance(body["visits"], int)
 
 
-def test_index_renders_page(monkeypatch):
-    monkeypatch.setattr(db, "get_connection", lambda: FakeConnection(fetchone_return=(3,)))
+def test_index_serves_static_site_page(monkeypatch):
+    # / is a static file response now (site/index.html) - it never touches
+    # the DB, unlike /api/stats below. No monkeypatch needed; a real
+    # db.get_connection call here would be a regression.
+    mock_get_connection = MagicMock()
+    monkeypatch.setattr(db, "get_connection", mock_get_connection)
 
     response = client.get("/")
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert "Chethan" in response.text
-
-
-def test_index_degrades_counter_when_db_unreachable(monkeypatch):
-    # Bug B regression, other half: the landing page is a demo surface, not
-    # the readiness check - a DB blip degrades the counter, it does not 500.
-    monkeypatch.setattr(db, "get_connection", _raise_unreachable)
-
-    response = client.get("/")
-
-    assert response.status_code == 200
-    assert "text/html" in response.headers["content-type"]
+    mock_get_connection.assert_not_called()
 
 
 def test_metrics_exposed():

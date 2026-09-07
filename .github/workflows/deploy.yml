@@ -112,7 +112,9 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
-          docker build -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" app/
+          # Repo-root context, not app/: app/Dockerfile now also COPYs
+          # site/ (the shared landing page), which lives outside app/.
+          docker build -f app/Dockerfile -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
           docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
       # Runs unconditionally (no `if:`) - unlike the build step above, this
@@ -157,6 +159,30 @@ jobs:
         with:
           version: "v4.2.4"
 
+      # Resolved fresh on every run rather than read from a repository
+      # variable: manage_master_user_password (terraform/modules/rds/main.tf)
+      # means RDS itself owns this secret and mints a NEW Secrets Manager ARN
+      # every time the instance is recreated (e.g. the nightly teardown/
+      # rebuild) - a vars.* value set once from a stale `terraform output`
+      # would silently point at a secret that no longer exists.
+      - name: Resolve RDS master-user secret ARN
+        id: resolve_secret_arn
+        run: |
+          set +e
+          SECRET_ARN=$(aws rds describe-db-instances \
+              --db-instance-identifier eks-platform-staging-postgres \
+              --query 'DBInstances[0].MasterUserSecret.SecretArn' \
+              --output text 2>&1)
+          DESCRIBE_STATUS=$?
+          set -e
+
+          if [ "$DESCRIBE_STATUS" -ne 0 ] || [ -z "$SECRET_ARN" ] || [ "$SECRET_ARN" = "None" ]; then
+            echo "::error::aws rds describe-db-instances failed to resolve MasterUserSecret.SecretArn for eks-platform-staging-postgres: $SECRET_ARN"
+            exit 1
+          fi
+
+          echo "secret_arn=$SECRET_ARN" >> "$GITHUB_OUTPUT"
+
       # -n staging only, no --create-namespace: ci_deploy has
       # AmazonEKSEditPolicy scoped to the "staging" namespace alone
       # (envs/staging/main.tf) - it cannot create namespaces, install
@@ -181,7 +207,7 @@ jobs:
             --set database.host="${{ vars.RDS_HOST }}" \
             --set database.port="${{ vars.RDS_PORT }}" \
             --set database.name="${{ vars.RDS_DB_NAME }}" \
-            --set database.secretArn="${{ vars.RDS_SECRET_ARN }}" \
+            --set database.secretArn="${{ steps.resolve_secret_arn.outputs.secret_arn }}" \
             --set ingress.certificateArn="${{ vars.ACM_CERTIFICATE_ARN }}" \
             --set ingress.host="${{ vars.APP_HOSTNAME }}"
 
@@ -298,6 +324,28 @@ jobs:
         with:
           version: "v4.2.4"
 
+      # Resolved fresh on every run rather than read from a repository
+      # variable - same reasoning as the staging job's identically-named step:
+      # manage_master_user_password means RDS mints a new Secrets Manager ARN
+      # on every instance recreation, so a static vars.* value would go stale.
+      - name: Resolve RDS master-user secret ARN
+        id: resolve_secret_arn
+        run: |
+          set +e
+          SECRET_ARN=$(aws rds describe-db-instances \
+              --db-instance-identifier eks-platform-production-postgres \
+              --query 'DBInstances[0].MasterUserSecret.SecretArn' \
+              --output text 2>&1)
+          DESCRIBE_STATUS=$?
+          set -e
+
+          if [ "$DESCRIBE_STATUS" -ne 0 ] || [ -z "$SECRET_ARN" ] || [ "$SECRET_ARN" = "None" ]; then
+            echo "::error::aws rds describe-db-instances failed to resolve MasterUserSecret.SecretArn for eks-platform-production-postgres: $SECRET_ARN"
+            exit 1
+          fi
+
+          echo "secret_arn=$SECRET_ARN" >> "$GITHUB_OUTPUT"
+
       # By digest (needs.deploy.outputs.image_digest), not by tag - see
       # charts/app/templates/deployment.yaml and values.yaml's image.digest.
       # No --create-namespace, same reasoning as the staging job's helm
@@ -333,6 +381,6 @@ jobs:
             --set database.host="${{ vars.PROD_RDS_HOST }}" \
             --set database.port="${{ vars.PROD_RDS_PORT }}" \
             --set database.name="${{ vars.PROD_RDS_DB_NAME }}" \
-            --set database.secretArn="${{ vars.PROD_RDS_SECRET_ARN }}" \
+            --set database.secretArn="${{ steps.resolve_secret_arn.outputs.secret_arn }}" \
             --set ingress.certificateArn="${{ vars.PROD_ACM_CERTIFICATE_ARN }}" \
             --set ingress.host="${{ vars.PROD_APP_HOSTNAME }}"

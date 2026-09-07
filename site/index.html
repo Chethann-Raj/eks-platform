@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Chethan R - DevOps / SRE</title>
+<style>
+  :root {
+    --bg: #0b0e11;
+    --fg: #e6e9ec;
+    --muted: #8b95a1;
+    --accent: #4fd1a5;
+    --border: #1e2328;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      Helvetica, Arial, sans-serif;
+    line-height: 1.65;
+    display: flex;
+    justify-content: center;
+    padding: 3rem 1.25rem;
+  }
+  main { max-width: 700px; width: 100%; }
+  h1 { margin: 0 0 0.15rem; font-size: 2rem; }
+  .headline { color: var(--accent); margin: 0 0 1rem; font-size: 1.05rem; }
+  .bio {
+    color: var(--muted);
+    margin: 0 0 1rem;
+    max-width: 60ch;
+    text-wrap: pretty;
+  }
+  .cert {
+    color: var(--muted);
+    margin: 0 0 1.25rem;
+    max-width: 60ch;
+  }
+  .links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin: 0 0 1.75rem;
+  }
+  .links a {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.9rem;
+    text-decoration: none;
+  }
+  section {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+  section h2 {
+    margin: 0 0 0.75rem;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  ul { margin: 0; padding-left: 1.15rem; }
+  li { margin-bottom: 0.5rem; }
+  li:last-child { margin-bottom: 0; }
+  a { color: var(--accent); }
+  footer { color: var(--muted); font-size: 0.85rem; margin-top: 1.5rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Chethan R</h1>
+  <p class="headline">DevOps / Site Reliability Engineer &middot; Bangalore</p>
+  <p class="bio">
+    DevOps and Site Reliability Engineer with 3 years running production
+    infrastructure for a PCI DSS-regulated fintech, provisioning
+    multi-cloud infrastructure with Terraform across AWS and OCI. Operates
+    Kubernetes (Amazon EKS) with Karpenter, ArgoCD GitOps and Helm; builds
+    CI/CD pipelines in Jenkins and GitHub Actions. Owns observability and
+    incident response on Prometheus, Grafana, Loki and OpenTelemetry, and
+    built a four-account AWS security detection platform from scratch.
+  </p>
+  <p class="cert">
+    AWS Certified Solutions Architect &ndash; Associate. Currently
+    preparing for the Certified Kubernetes Administrator.
+  </p>
+
+  <div class="links">
+    <a href="https://www.linkedin.com/in/chethan-raj">LinkedIn</a>
+    <a href="https://github.com/Chethann-Raj">GitHub</a>
+  </div>
+
+  <section>
+    <h2>Platform</h2>
+    <ul>
+      <li>Terraform-provisioned VPC, EKS cluster, and RDS Postgres</li>
+      <li>GitHub Actions deploys via OIDC - no long-lived AWS keys in CI</li>
+      <li>AWS Load Balancer Controller with ExternalDNS and ACM handle routing and TLS</li>
+      <li>External Secrets Operator syncs credentials from AWS Secrets Manager</li>
+      <li>Postgres runs in private subnets, reachable only from inside the cluster</li>
+      <li>Prometheus, Grafana, and Loki for observability</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Other projects</h2>
+    <ul>
+      <li>An AI operations agent on AWS Bedrock and LangGraph, queried from Slack, running read-only tools over ClickHouse telemetry, shipped to production EKS inside a $50/month inference budget.</li>
+      <li>A Wazuh SIEM built from scratch across a four-account AWS Organization; custom decoders and rule tuning cut alert volume ~95%.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <a href="https://github.com/Chethann-Raj/eks-platform">github.com/Chethann-Raj/eks-platform</a>
+    <br>
+    Built and deployed from this repository.
+  </footer>
+</main>
+</body>
+</html>

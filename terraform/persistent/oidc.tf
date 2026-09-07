@@ -125,6 +125,26 @@ data "aws_iam_policy_document" "ci_deploy_permissions" {
     actions   = ["eks:DescribeCluster"]
     resources = [local.staging_cluster_arn]
   }
+
+  statement {
+    sid    = "RDSDescribeForSecretArnResolution"
+    effect = "Allow"
+    # deploy.yml resolves database.secretArn at deploy time by calling
+    # rds:DescribeDBInstances instead of reading a repository variable set
+    # once from `terraform output` - manage_master_user_password
+    # (terraform/modules/rds/main.tf) means RDS mints a new Secrets Manager
+    # ARN on every instance recreation, so a static variable goes stale on
+    # the first nightly teardown/rebuild.
+    #
+    # rds:DescribeDBInstances does not support resource-level permissions
+    # (same category as ecr:GetAuthorizationToken above) - AWS's IAM
+    # reference for RDS lists no resource type for this action, so
+    # `--db-instance-identifier` is a client-side query filter, not
+    # something the IAM engine can scope a Resource ARN against. "*" is
+    # unavoidable here.
+    actions   = ["rds:DescribeDBInstances"]
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_role_policy" "ci_deploy_permissions" {
