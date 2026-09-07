@@ -211,12 +211,14 @@ jobs:
             --set ingress.certificateArn="${{ vars.ACM_CERTIFICATE_ARN }}" \
             --set ingress.host="${{ vars.APP_HOSTNAME }}"
 
-      # Two separate poll loops, deliberately not merged: an ALB that never
+      # Three separate poll loops, deliberately not merged: an ALB that never
       # gets provisioned (AWS Load Balancer Controller / IAM / subnet
-      # tagging) and a site that never answers once the ALB exists (DNS
-      # propagation, ExternalDNS, target-group health, ACM) are different
-      # failure domains with different fixes - the log needs to say which
-      # one broke, not just "smoke test failed".
+      # tagging), the static landing page (site/index.html - proves it
+      # actually shipped inside the image, not just that something answers),
+      # and the DB-backed /api/stats read (proves RDS connectivity via the
+      # mounted secret) are three different failure domains with three
+      # different fixes - the log needs to say which one broke, not just
+      # "smoke test failed".
       - name: Smoke test
         if: success()
         run: |
@@ -239,27 +241,44 @@ jobs:
           fi
           echo "ALB hostname: $ALB_HOSTNAME"
 
-          echo "Waiting for https://${{ vars.APP_HOSTNAME }} to return 200 (max 5m, 15s interval)..."
+          echo "Waiting for https://${{ vars.APP_HOSTNAME }}/ to return the static landing page (max 5m, 15s interval)..."
+          PAGE_OK=""
           HTTP_CODE=""
+          CONTENT_TYPE=""
           for i in $(seq 1 20); do
-            HTTP_CODE=$(curl -fsS -o /dev/null -w '%{http_code}' "https://${{ vars.APP_HOSTNAME }}" || true)
-            echo "  [$i/20] http_code: '${HTTP_CODE:-<none>}'"
-            if [ "$HTTP_CODE" = "200" ]; then
+            CURL_OUT=$(curl -fsS -o /tmp/smoke_index_body.html -w '%{http_code} %{content_type}' \
+              "https://${{ vars.APP_HOSTNAME }}/" || true)
+            HTTP_CODE=$(echo "$CURL_OUT" | awk '{print $1}')
+            CONTENT_TYPE=$(echo "$CURL_OUT" | cut -d' ' -f2-)
+            echo "  [$i/20] http_code: '${HTTP_CODE:-<none>}', content-type: '${CONTENT_TYPE:-<none>}'"
+            if [ "$HTTP_CODE" = "200" ] \
+                && echo "$CONTENT_TYPE" | grep -qi 'text/html' \
+                && grep -q "Chethan R" /tmp/smoke_index_body.html; then
+              PAGE_OK=1
               break
             fi
             sleep 15
           done
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "::error::https://${{ vars.APP_HOSTNAME }} never returned 200 after 5 minutes (last code: '${HTTP_CODE:-<none>}') - ALB hostname resolved fine above, so look at DNS/ExternalDNS, target-group health, or the ACM certificate, not ALB provisioning."
+          if [ -z "$PAGE_OK" ]; then
+            echo "::error::https://${{ vars.APP_HOSTNAME }}/ never returned a 200 text/html page containing 'Chethan R' after 5 minutes (last code: '${HTTP_CODE:-<none>}', last content-type: '${CONTENT_TYPE:-<none>}') - ALB hostname resolved fine above, so this is the static page (site/index.html) failing to ship inside the image or serve correctly, not ALB provisioning."
             exit 1
           fi
-          echo "Site responded 200."
+          echo "Static page responded 200 text/html with expected content."
 
-          echo "Verifying the response body reflects a real DB read..."
-          BODY=$(curl -fsS "https://${{ vars.APP_HOSTNAME }}/api/stats")
-          echo "  body: $BODY"
-          if ! echo "$BODY" | grep -q '"visits"'; then
-            echo "::error::Response body is missing the DB-backed 'visits' field (app/main.py's /api/stats endpoint) - got: $BODY"
+          echo "Waiting for https://${{ vars.APP_HOSTNAME }}/api/stats to reflect a real DB read (max 5m, 15s interval)..."
+          STATS_OK=""
+          BODY=""
+          for i in $(seq 1 20); do
+            BODY=$(curl -fsS "https://${{ vars.APP_HOSTNAME }}/api/stats" || true)
+            echo "  [$i/20] body: '${BODY:-<none>}'"
+            if echo "$BODY" | grep -q '"visits"'; then
+              STATS_OK=1
+              break
+            fi
+            sleep 15
+          done
+          if [ -z "$STATS_OK" ]; then
+            echo "::error::https://${{ vars.APP_HOSTNAME }}/api/stats never returned a body with the DB-backed 'visits' field after 5 minutes (app/main.py's /api/stats endpoint, last body: '${BODY:-<none>}') - the static page above responded fine, so this is RDS connectivity via the mounted secret, not routing/DNS."
             exit 1
           fi
           echo "Smoke test passed."
